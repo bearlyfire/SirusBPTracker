@@ -1,0 +1,8 @@
+## Interface: 30300
+## Title: Sirus BP Tracker
+## Notes: Отслеживание боевого пропуска для всех персонажей.
+## Author: Медведж
+## Version: 1.0
+## SavedVariables: SirusBPTrackerDB, SirusBPTrackerFilterDB, SirusBPTrackerCharFilterDB, SirusBPTrackerConfig
+
+SirusBPTracker.lua
