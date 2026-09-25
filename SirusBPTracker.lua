@@ -191,7 +191,7 @@ CreateMainGUI = function()
         end
     end)
 
---sbpt-v108-help-button-final: ИДЕАЛЬНАЯ КРУПНАЯ КРУГЛАЯ КНОПКА СПРАВКИ БЕЗ НАЛОЖЕНИЙ
+--sbpt-v108-help-button-final: КНОПКА СПРАВКИ БЕЗ НАЛОЖЕНИЙ
     -- Создаем круглую кнопку на базе чистого круглого шаблона Близзард
     local helpBtn = CreateFrame("Button", "SirusBPHelpButton", gui)
     helpBtn:SetSize(22, 22) -- Чуть увеличили размер для идеального баланса с шестеренкой
@@ -202,7 +202,7 @@ CreateMainGUI = function()
     helpBtn:SetPushedTexture("Interface\\Buttons\\UI-SpellbookIcon-NextPage-Down")
     helpBtn:SetHighlightTexture("Interface\\Buttons\\UI-Common-MouseHilight", "ADD")
     
-    -- Разворачиваем круглую подложку ( Blizzard-стрелочку убираем, делая невидимой)
+    -- Разворачиваем круглую подложку 
     if helpBtn:GetNormalTexture() then helpBtn:GetNormalTexture():SetTexCoord(0, 0, 0, 0) end
     if helpBtn:GetPushedTexture() then helpBtn:GetPushedTexture():SetTexCoord(0, 0, 0, 0) end
 
@@ -962,7 +962,7 @@ CreateFilterGUI = function()
         SirusBPTrackerConfig.OnlyBpSbors = not not self:GetChecked()
         if UpdateGUIText then UpdateGUIText() end
     end)
---sbpt-v99-header-only: КОНЕЦ МИКРОХИРУРГИЧЕСКОЙ ЗАМЕНЫ ШАПКИ
+--sbpt-v99-header-only: 
 
 
     -- 3. КРАСИВЫЙ ИНПУТ ПОИСКА КВЕСТА (Возвращен на самый верх, чтобы окно было красивым!)
@@ -1119,13 +1119,12 @@ CreateFilterGUI = function()
     return filterGui
 end
 --sbpt-v02: КОНЕЦ ПОЛНОГО БЛОКА ОКНА ФИЛЬТРОВ
---sbpt-v110-clean-help-text: МАКСИМАЛЬНО ЛАКОНИЧНЫЙ ТЕКСТ ОКНА СПРАВКИ
---sbpt-v111-about-author: ОБНОВЛЕННАЯ СТИЛЬНАЯ КАРТОЧКА ОБ АДДОНЕ С СИНЕМ НИКОМ МАГА
+--sbpt-v139-donate-fixed: ЖЕСТКИЙ ФИКС НАЛОЖЕНИЯ ТЕКСТА И ТЕКСТУРЫ QR-КОДА
 CreateHelpGUI = function()
     if helpGui then return helpGui end
 
     local hGui = CreateFrame("Frame", "SirusBPHelpGUI", UIParent)
-    hGui:SetSize(380, 110) -- Оптимальный размер под две аккуратные строки текста
+    hGui:SetSize(470, 180) -- ИСПРАВЛЕНО: Увеличили высоту до 180, чтобы полностью исключить наложение!
     hGui:SetPoint("CENTER", 0, 40)
     hGui:SetFrameStrata("DIALOG")
     hGui:SetBackdrop({
@@ -1142,7 +1141,7 @@ CreateHelpGUI = function()
     hGui:SetScript("OnDragStop", hGui.StopMovingOrSizing)
     tinsert(UISpecialFrames, "SirusBPHelpGUI")
 
-    -- 1. Меняем заголовок окна по твоей просьбе
+    -- Заголовок окна
     local title = hGui:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     title:SetPoint("TOPLEFT", 16, -14)
     title:SetText("Об аддоне SirusBPTracker")
@@ -1150,20 +1149,49 @@ CreateHelpGUI = function()
     local closeBtn = CreateFrame("Button", nil, hGui, "UIPanelCloseButton")
     closeBtn:SetPoint("TOPRIGHT", -3, -3)
 
-    -- 2. Выводим текст благодарности с голубым ником мага Медведж
-    local helpText = hGui:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    helpText:SetPoint("TOPLEFT", 16, -45)
-    helpText:SetWidth(350)
+    -- 1. ИСПРАВЛЕНО: 
+    local helpText = hGui:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    helpText:SetPoint("TOPLEFT", 16, -42)
+    helpText:SetWidth(300) -- Четко держим ширину текстового блока
     helpText:SetJustifyH("LEFT")
+    helpText:SetText("Если Вам понравился аддон, можете пожертвовать мне золото через внутриигровую почту.\n\nСервер х5, |cff3fc7ebМедведж|r\n\n|cffffd100Поддержать автора вне игры можно по ссылке или QR-коду:|r")
+
+    -- 2. 
+    local editBox = CreateFrame("EditBox", "SirusBPDonateLinkEditBox", hGui)
+    editBox:SetSize(290, 22)
+    editBox:SetPoint("TOPLEFT", 16, -140) 
+    editBox:SetFontObject("GameFontHighlightSmall")
+    editBox:SetAutoFocus(false)
+    editBox:SetText("https://pay.cloudtips.ru/p/aff01756")
+    editBox:SetTextInsets(6, 6, 0, 0)
+    editBox:SetBackdrop({
+        bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 12, edgeSize = 10, insets = { left = 2, right = 2, top = 2, bottom = 2 }
+    })
+    editBox:SetBackdropColor(0.01, 0.01, 0.01, 1.0)
+    editBox:SetBackdropBorderColor(0.4, 0.4, 0.4, 1.0)
+
+    editBox:SetScript("OnEditFocusGained", function(self) self:HighlightText() end)
+    editBox:SetScript("OnMouseUp", function(self) self:HighlightText() end)
+    editBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+
+--sbpt-v140-qr-size-fix: РАЗМЕР И ОТОБРАЖЕНИЕ QR-КОДА В ОКНЕ
+    local qrFrame = CreateFrame("Frame", nil, hGui)
+    qrFrame:SetSize(128, 128) -- Увеличили до 128x128 для идеальной четкости пикселей!
+    qrFrame:SetPoint("TOPRIGHT", hGui, "TOPRIGHT", -18, -38) 
     
-    -- Применили код цвета мага |cff3fc7eb для ника Медведж
-    helpText:SetText("Если Вам понравился аддон, можете пожертвовать мне немного золота через внутриигровую почту.\n\nСервер х5, |cff3fc7ebМедведж|r")
+    local qrTexture = qrFrame:CreateTexture(nil, "ARTWORK")
+    qrTexture:SetAllPoints(qrFrame)
+    qrTexture:SetTexture("Interface\\AddOns\\SirusBPTracker\\qr")
+    qrFrame.texture = qrTexture
+--sbpt-v140-qr-size-fix: КОНЕЦ ФИКСА ГАБАРИТОВ
+
 
     hGui:Hide()
     helpGui = hGui
     return helpGui
 end
---sbpt-v111-about-author: КОНЕЦ ОБНОВЛЕНИЯ КАРТОЧКИ
+--sbpt-v139-donate-fixed: КОНЕЦ ОБНОВЛЕНИЯ
 
 
 
