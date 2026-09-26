@@ -191,7 +191,7 @@ CreateMainGUI = function()
         end
     end)
 
---sbpt-v108-help-button-final: КНОПКА СПРАВКИ БЕЗ НАЛОЖЕНИЙ
+--sbpt-v108-help-button-final: ИДЕАЛЬНАЯ КРУПНАЯ КРУГЛАЯ КНОПКА СПРАВКИ БЕЗ НАЛОЖЕНИЙ
     -- Создаем круглую кнопку на базе чистого круглого шаблона Близзард
     local helpBtn = CreateFrame("Button", "SirusBPHelpButton", gui)
     helpBtn:SetSize(22, 22) -- Чуть увеличили размер для идеального баланса с шестеренкой
@@ -202,7 +202,7 @@ CreateMainGUI = function()
     helpBtn:SetPushedTexture("Interface\\Buttons\\UI-SpellbookIcon-NextPage-Down")
     helpBtn:SetHighlightTexture("Interface\\Buttons\\UI-Common-MouseHilight", "ADD")
     
-    -- Разворачиваем круглую подложку 
+    -- Разворачиваем круглую подложку ( Blizzard-стрелочку убираем, делая невидимой)
     if helpBtn:GetNormalTexture() then helpBtn:GetNormalTexture():SetTexCoord(0, 0, 0, 0) end
     if helpBtn:GetPushedTexture() then helpBtn:GetPushedTexture():SetTexCoord(0, 0, 0, 0) end
 
@@ -647,6 +647,11 @@ UpdateGUIText = function()
                 end
                 GameTooltip:Show()
             end)
+--sbpt-v143-tooltip-leave-fix: ЖЕСТКИЙ ФИКС ЗАВИСАНИЯ ПОДСКАЗКИ ПРИ УВОДЕ МЫШИ
+                    rowBtn:SetScript("OnLeave", function(self)
+                        GameTooltip:Hide() -- Моментально прячем тултип, как только мышь ушла со строки!
+                    end)
+--sbpt-v143-tooltip-leave-fix: КОНЕЦ ФИКСА
 
             yOffset = yOffset - (sborLine:GetStringHeight() + 8)
             table.insert(sborChild.widgets, sborLine)
@@ -962,7 +967,7 @@ CreateFilterGUI = function()
         SirusBPTrackerConfig.OnlyBpSbors = not not self:GetChecked()
         if UpdateGUIText then UpdateGUIText() end
     end)
---sbpt-v99-header-only: 
+--sbpt-v99-header-only: КОНЕЦ МИКРОХИРУРГИЧЕСКОЙ ЗАМЕНЫ ШАПКИ
 
 
     -- 3. КРАСИВЫЙ ИНПУТ ПОИСКА КВЕСТА (Возвращен на самый верх, чтобы окно было красивым!)
@@ -1156,10 +1161,10 @@ CreateHelpGUI = function()
     helpText:SetJustifyH("LEFT")
     helpText:SetText("Если Вам понравился аддон, можете пожертвовать мне золото через внутриигровую почту.\n\nСервер х5, |cff3fc7ebМедведж|r\n\n|cffffd100Поддержать автора вне игры можно по ссылке или QR-коду:|r")
 
-    -- 2. 
+    -- 2. ИСПРАВЛЕНО: Сдвинули EditBox ниже (на -140), теперь наложение физически невозможно!
     local editBox = CreateFrame("EditBox", "SirusBPDonateLinkEditBox", hGui)
     editBox:SetSize(290, 22)
-    editBox:SetPoint("TOPLEFT", 16, -140) 
+    editBox:SetPoint("TOPLEFT", 16, -140) -- Идеальный нижний отступ
     editBox:SetFontObject("GameFontHighlightSmall")
     editBox:SetAutoFocus(false)
     editBox:SetText("https://pay.cloudtips.ru/p/aff01756")

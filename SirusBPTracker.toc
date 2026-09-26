@@ -2,7 +2,7 @@
 ## Title: Sirus BP Tracker
 ## Notes: Отслеживание боевого пропуска для всех персонажей.
 ## Author: Медведж
-## Version: 1.01
+## Version: 1.02
 ## SavedVariables: SirusBPTrackerDB, SirusBPTrackerFilterDB, SirusBPTrackerCharFilterDB, SirusBPTrackerConfig
 
 SirusBPTracker.lua
