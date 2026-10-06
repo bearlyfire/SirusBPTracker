@@ -243,6 +243,7 @@ CreateMainGUI = function()
     end)
 --sbpt-v108-help-button-final: КОНЕЦ ФИКСА КНОПКИ
 --sbpt-v195: КНОПКА "БП" С АДРЕСНЫМ КЛИКОМ ПО НАДЛЕЖАЩЕЙ КНОПКЕ СИРУСА И СТАБИЛЬНЫМ СДВИГОМ ПОИСКА
+--sbpt-v286: СКРЫТИЕ КАСТОМНОЙ КНОПКИ БП ДЛЯ ПЕРСОНАЖЕЙ НИЖЕ 80 УРОВНЯ
     local sirusBpOpenBtn = CreateFrame("Button", "SirusBPOpenNativeBtn", gui, "UIPanelButtonTemplate")
     sirusBpOpenBtn:SetSize(32, 20)
     sirusBpOpenBtn:SetPoint("RIGHT", helpBtn, "LEFT", -5, 0) -- Садится ровно левее золотого знака "?"
@@ -254,7 +255,18 @@ CreateMainGUI = function()
         _G[sirusBpOpenBtn:GetName() .. "Text"]:SetFont("Fonts\\FRIZQT__.TTF", 10, "OUTLINE")
     end
 
+    -- ЖЕЛЕЗНЫЙ ФИЛЬТР УРОВНЯ: Если персонаж ниже 80 уровня, наша кнопка бесшумно скрывается с холста
+    local playerLevel = UnitLevel("player") or 1
+    if playerLevel < 80 then
+        sirusBpOpenBtn:Hide()
+    else
+        sirusBpOpenBtn:Show()
+    end
+
     sirusBpOpenBtn:SetScript("OnClick", function()
+        -- Дополнительный рубеж безопасности: блокируем клик, если кнопку вызвали из стороннего макроса
+        if (UnitLevel("player") or 1) < 80 then return end
+
         -- 1. Сначала открываем само официальное окно БП Сируса
         if ToggleBattlePassFrame then
             pcall(ToggleBattlePassFrame)
@@ -269,6 +281,7 @@ CreateMainGUI = function()
             end
         end
     end)
+
 
     -- ИСПРАВЛЕНО: Жесткая привязка к стабильной helpBtn со сдвигом влево на -52 (строка гарантированно на месте!)
     local searchBox = CreateFrame("EditBox", "SirusBPSearchBox", gui)
@@ -910,7 +923,8 @@ UpdateGUIText = function()
                                         
                                     -- МЕХАНИКА Б: Обычный клик по названию со статусом "Завершено" открывает задания БП Сируса
                                     else
-                                        if capturedRawQuest then
+									    local playerLevel = UnitLevel("player") or 1
+                                        if capturedRawQuest and playerLevel >= 80 then
                                             local currentProgressText = tostring(capturedRawQuest.progress or "0/0")
                                             if currentProgressText == "Завершено" or currentProgressText == "Завершено!" then
                                                 if ToggleBattlePassFrame then
@@ -1803,15 +1817,19 @@ end
 local lastScanTime = 0
 
 function ExecuteSilentBPScan(force) 
-    if not C_BattlePass then 
+    local pName = UnitName("player")
+    local pRealm = GetRealmName()
+    local playerLevel = UnitLevel("player") or 1    
+	if playerLevel < 80 then 
+        return 
+    end
+	
+	if not C_BattlePass then 
         print("|cffff0000[SBPT-MEM-DEBUG] Критическая ошибка: C_BattlePass отсутствует!|r")
         return 
     end
     
     if C_BattlePass.RequestQuests then C_BattlePass.RequestQuests() end
-
-    local pName = UnitName("player")
-    local pRealm = GetRealmName()
     
     -- ЗАПИСЬ В ОЗУ: Работаем строго внутри локальной RAM-таблицы без нагрузки на жесткий диск
     if not ramCacheDB[pRealm] then ramCacheDB[pRealm] = {} end
