@@ -19,6 +19,8 @@ local CLASS_COLORS = {
 -- Пул для FontString
 local fontStringPool = {}
 local activeStrings = {}
+--sbpt-v173: ОБЪЯВЛЕНИЕ ВЫСОКОПРОИЗВОДИТЕЛЬНОГО ОЗУ-КЭША ДЛЯ ЗАЩИТЫ ДИСКА ОТ МИКРОФРИЗОВ
+local ramCacheDB = {}
 
 local function GetAnyText(obj)
     if not obj then return nil end
@@ -26,6 +28,8 @@ local function GetAnyText(obj)
     if obj.Text and obj.Text.GetText and obj.Text:GetText() and obj.Text:GetText() ~= "" then return obj.Text:GetText() end
     return nil
 end
+
+--[[ страя функция получения данных
 -- ИСПРАВЛЕННЫЙ Высокоточное сканирование карточки квеста
 local function GetProgressDirect(questFrameName)
     local mainFrame = _G[questFrameName]
@@ -98,7 +102,9 @@ local function GetProgressDirect(questFrameName)
     if bestProgress then return bestProgress end
     return "0/1"
 end
+]]
 
+--[[ страя функция получения данных
 -- Функция записи данных в БД
 local function DirectScanBattlePass()
     if not BattlePassFrame or not BattlePassFrame:IsShown() then return false end
@@ -140,6 +146,7 @@ local function DirectScanBattlePass()
     end
     return false
 end
+]]
 -------------------------------------------------------------------------------
 -- GUI ИНТЕРФЕЙС И ПОИСКОВАЯ СТРОКА
 -------------------------------------------------------------------------------
@@ -191,38 +198,28 @@ CreateMainGUI = function()
         end
     end)
 
---sbpt-v108-help-button-final: ИДЕАЛЬНАЯ КРУПНАЯ КРУГЛАЯ КНОПКА СПРАВКИ БЕЗ НАЛОЖЕНИЙ
-    -- Создаем круглую кнопку на базе чистого круглого шаблона Близзард
+--sbpt-v196: ПЕРЕРАБОТКА КНОПКИ СПРАВКИ "?" В ОБЩИЙ СТРОГИЙ СТИЛЬ С ПРАВИЛЬНОЙ ГЕОМЕТРИЕЙ И ПОДЛОЖКОЙ
     local helpBtn = CreateFrame("Button", "SirusBPHelpButton", gui)
-    helpBtn:SetSize(22, 22) -- Чуть увеличили размер для идеального баланса с шестеренкой
-    helpBtn:SetPoint("RIGHT", filterBtn, "LEFT", -5, 0)
-    
-    -- Используем чистые круглые текстуры Blizzard без внутренних точек и скрытого мусора
-    helpBtn:SetNormalTexture("Interface\\Buttons\\UI-SpellbookIcon-NextPage-Up")
-    helpBtn:SetPushedTexture("Interface\\Buttons\\UI-SpellbookIcon-NextPage-Down")
+    helpBtn:SetSize(20, 20) -- Установили идеальный размер 20x20 вровень с шестеренкой настроек
+    helpBtn:SetPoint("RIGHT", filterBtn, "LEFT", -5, 0) -- Садится строго левее шестеренки
     helpBtn:SetHighlightTexture("Interface\\Buttons\\UI-Common-MouseHilight", "ADD")
     
-    -- Разворачиваем круглую подложку ( Blizzard-стрелочку убираем, делая невидимой)
-    if helpBtn:GetNormalTexture() then helpBtn:GetNormalTexture():SetTexCoord(0, 0, 0, 0) end
-    if helpBtn:GetPushedTexture() then helpBtn:GetPushedTexture():SetTexCoord(0, 0, 0, 0) end
-
-    -- Делаем красивый круглый фон нативного цвета интерфейса
+    -- Применяем фирменную темную полупрозрачную подложку нашего аддона
     helpBtn:SetBackdrop({
-        bgFile = "Interface\\CharacterFrame\\BarBackground",
+        bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        tile = true, tileSize = 16, edgeSize = 12, insets = { left = 2, right = 2, top = 2, bottom = 2 }
+        tile = true, tileSize = 16, edgeSize = 10, insets = { left = 2, right = 2, top = 2, bottom = 2 }
     })
-    helpBtn:SetBackdropColor(0.1, 0.1, 0.1, 0.9)
+    helpBtn:SetBackdropColor(0, 0, 0, 0.8)
     helpBtn:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
 
---sbpt-v109-help-font-alignment: ТОЧЕЧНЫЙ ФИКС ВЫРАВНИВАНИЯ И ЖИРНОСТИ ЗНАКА ВОПРОСА
-    -- Рисуем МАССИВНЫЙ жирный знак вопроса строго по центру горизонтальной линейки шапки
+    -- Рисуем аккуратный, центрированный знак вопроса без сверхжирных наложений
     local helpBtnText = helpBtn:CreateFontString(nil, "OVERLAY")
-    helpBtnText:SetFont("Fonts\\FRIZQT__.TTF", 13, "THICKOUTLINE") -- ВКЛЮЧИЛИ СВЕРХЖИРНЫЙ КОНТУР!
-    helpBtnText:SetPoint("CENTER", 0, -2) -- ИСПРАВЛЕНО: Сместили на 2 пикселя вниз для идеального выравнивания
---sbpt-v109-help-font-alignment: КОНЕЦ ФИКСА ВЫРАВНИВАНИЯ
+    helpBtnText:SetFont("Fonts\\FRIZQT__.TTF", 11, "OUTLINE")
+    helpBtnText:SetPoint("CENTER", 0, 0) -- Идеальный центр прямоугольной кнопки
     helpBtnText:SetText("?")
-    helpBtnText:SetTextColor(1, 0.82, 0) -- Золотой цвет
+    helpBtnText:SetTextColor(0.7, 0.7, 0.7, 1) -- Сдержанный серебристо-серый цвет в общий тон шапки
+
     helpBtn.text = helpBtnText
 
     -- Подсветка при наведении мыши
@@ -245,12 +242,38 @@ CreateMainGUI = function()
         end
     end)
 --sbpt-v108-help-button-final: КОНЕЦ ФИКСА КНОПКИ
+--sbpt-v195: КНОПКА "БП" С АДРЕСНЫМ КЛИКОМ ПО НАДЛЕЖАЩЕЙ КНОПКЕ СИРУСА И СТАБИЛЬНЫМ СДВИГОМ ПОИСКА
+    local sirusBpOpenBtn = CreateFrame("Button", "SirusBPOpenNativeBtn", gui, "UIPanelButtonTemplate")
+    sirusBpOpenBtn:SetSize(32, 20)
+    sirusBpOpenBtn:SetPoint("RIGHT", helpBtn, "LEFT", -5, 0) -- Садится ровно левее золотого знака "?"
+    sirusBpOpenBtn:SetText("БП")
+    
+    if sirusBpOpenBtn.Text then
+        sirusBpOpenBtn.Text:SetFont("Fonts\\FRIZQT__.TTF", 10, "OUTLINE")
+    elseif _G[sirusBpOpenBtn:GetName() .. "Text"] then
+        _G[sirusBpOpenBtn:GetName() .. "Text"]:SetFont("Fonts\\FRIZQT__.TTF", 10, "OUTLINE")
+    end
 
+    sirusBpOpenBtn:SetScript("OnClick", function()
+        -- 1. Сначала открываем само официальное окно БП Сируса
+        if ToggleBattlePassFrame then
+            pcall(ToggleBattlePassFrame)
+        elseif BattlePassFrame and BattlePassFrame.Show then
+            if BattlePassFrame:IsShown() then BattlePassFrame:Hide() else BattlePassFrame:Show() end
+        end
 
+        -- 2. ИДЕАЛЬНЫЙ АДРЕСНЫЙ ТРИГГЕР: Имитируем щелчок по родной глобальной кнопке Сируса!
+        if BattlePassFrame and BattlePassFrame:IsShown() then
+            if BattlePassFrameTopPanelQuestPageButton and BattlePassFrameTopPanelQuestPageButton.Click then
+                pcall(BattlePassFrameTopPanelQuestPageButton.Click, BattlePassFrameTopPanelQuestPageButton)
+            end
+        end
+    end)
 
+    -- ИСПРАВЛЕНО: Жесткая привязка к стабильной helpBtn со сдвигом влево на -52 (строка гарантированно на месте!)
     local searchBox = CreateFrame("EditBox", "SirusBPSearchBox", gui)
     searchBox:SetSize(130, 20)
-    searchBox:SetPoint("TOPRIGHT", helpBtn, "TOPLEFT", -15, -1)
+    searchBox:SetPoint("TOPRIGHT", helpBtn, "TOPLEFT", -52, -1) -- Четко левее кнопки БП с красивым отступом
     searchBox:SetAutoFocus(false)
     searchBox:SetFontObject("GameFontHighlightSmall")
     searchBox:SetTextInsets(6, 6, 0, 0)
@@ -406,9 +429,7 @@ CreateMainGUI = function()
     return mainGui
 end
 
-
-
-
+---------------------------------------------------------------------------------------------------------------
 
 --sbpt-v08-ui-fixes: ЧАСТЬ 1 ИЗ 2 ПОЛНОГО БЛОКА ИНТЕРФЕЙСА (ЦВЕТА КЛАССОВ, ГОЛУБЫЕ ПЛАШКИ, ЗОЛОТЫЕ КВЕСТЫ)
 local function AcquireFontString(parent, font, r, g, b, justify, width, indent, yOffset)
@@ -442,12 +463,20 @@ local function ClearFontStringPool()
     activeStrings = {}
 end
 
---sbpt-v53-safe-ui: ФРАГМЕНТ 1 ИЗ 2 ОБНОВЛЕННОЙ ОТРИСОВКИ (БЕЗОПАСНЫЕ СБОРЫ)
+--sbpt-v172: ПОЛНЫЙ МОНОЛИТ UI С ОБНОВЛЕНИЕМ НА ЛЕТУ И ПОИСКОМ ТВИНКОВ СТРОГО ПО ID КВЕСТОВ
 UpdateGUIText = function()
     local gui = CreateMainGUI()
     local child = gui.scrollChild
     local sborChild = gui.sborScrollChild
     ClearFontStringPool()
+
+    -- ЖЕСТКАЯ ЗАЧИСТКА ХОЛСТА КВЕСТОВ: Скрываем старые текстовые виджеты первой вкладки
+    if child and child.widgets then
+        for _, widget in ipairs(child.widgets) do
+            if widget and widget.Hide then widget:Hide() end
+        end
+    end
+    if child then child.widgets = {} child:SetHeight(0) end -- Обнуляем массив и высоту квестов
 
     if not SirusBPTrackerConfig then SirusBPTrackerConfig = {} end
     local activeTab = SirusBPTrackerConfig.ActiveTab or 1
@@ -459,32 +488,23 @@ UpdateGUIText = function()
     -- ========================================================================
     -- ЛОГИКА ВКЛАДКИ 2: АКТУАЛЬНЫЕ СБОРЫ ИЗ ЧАТА СИРУСА (СНИЗУ ВВЕРХ)
     -- ========================================================================
-    --sbpt-v54-ui-buttons-fix: ОГРАНИЧЕНИЕ КНОПОК ШЁПОТА И УЛИЧШЕННЫЕ ЦВЕТА СБОРОВ
---sbpt-v133-lfg-clear-widgets: УЛЬТРА-ОЧИСТКА ХОЛСТА СБОРОВ ПЕРЕД ОТРИСОВКОЙ
+    --sbpt-v175: ПЕРЕВОД ВКЛАДКИ СБОРОВ ЧАТА И ТУЛТИПОВ ТВИНКОВ НА ВЫСОКОПРОИЗВОДИТЕЛЬНЫЙ ОЗУ-КЭШ
     if activeTab == 2 and sborChild then
         if not SirusBPTrackerDB["QUEST_LFG"] then SirusBPTrackerDB["QUEST_LFG"] = {} end
         
-        -- ЖЕСТКАЯ ЗАЧИСТКА: Пробегаемся по всем старым созданным строчкам и кнопкам холста и скрываем их!
         if sborChild.widgets then
             for _, widget in ipairs(sborChild.widgets) do
                 if widget and widget.Hide then widget:Hide() end
             end
         end
-        sborChild.widgets = {} -- Обнуляем массив виджетов
+        sborChild.widgets = {}
 
-        -- Обнуляем глобальные координаты высоты и кнопок шёпота
         yOffset = -10
         sborBtnIdx = 1
         
-        local currentTime = time()
---sbpt-v136-flat-chrono-sort: АБСОЛЮТНАЯ ХРОНОЛОГИЧЕСКАЯ СТРУНА ВСЕХ КРИКОВ БЕЗ СМЕШИВАНИЯ
-        local sortedSbors = {} -- Эта таблица нам больше не нужна для циклов, но оставляем для совместимости
-        
-        -- 1. Собираем ВСЕХ авторов из ВСЕХ квестов в один единый плоский список
         local flatAuthorsList = {}
         if SirusBPTrackerDB["QUEST_LFG"] then
             for questKey, sbor in pairs(SirusBPTrackerDB["QUEST_LFG"]) do
-                -- Умный двухпозиционный фильтр ЛФГ-строк (БП / Все квесты)
                 local allowedToRender = true
                 if SirusBPTrackerConfig and SirusBPTrackerConfig.OnlyBpSbors == true then
                     local isDailyQuest = string.find(string.lower(sbor.questName or ""), "ежедневное")
@@ -494,13 +514,11 @@ UpdateGUIText = function()
                     end
                 end
 
-                if allowedToRender and sbor.authors then
-                    for _, auth in ipairs(sbor.authors) do
+                if allowedToRender and sbor.authors and type(sbor.authors) == "table" then
+                    for _, auth in pairs(sbor.authors) do -- Используем pairs вместо ipairs для хэш-таблиц Сируса
                         if auth.name and auth.msg then
                             local elapsedSec = currentTime - (auth.time or sbor.time or currentTime)
-                            -- Проверяем жесткие 20 минут (1200 сек) для каждого крика
                             if elapsedSec <= 1200 then
-                                -- Запоминаем ссылку на родительский квест, чтобы вытащить ID и прогресс твинков
                                 table.insert(flatAuthorsList, {
                                     auth = auth,
                                     sbor = sbor,
@@ -514,12 +532,10 @@ UpdateGUIText = function()
             end
         end
 
-        -- 2. МАТЕМАТИЧЕСКАЯ СОРТИРОВКА: Выстраиваем абсолютно все крики по времени от свежих к старым!
         table.sort(flatAuthorsList, function(a, b)
             return (a.time or 0) > (b.time or 0)
         end)
 
-        -- 3.ОТРИСОВКА ИДЕАЛЬНОЙ СТРУНЫ НА ЭКРАНЕ
         for _, item in ipairs(flatAuthorsList) do
             local auth = item.auth
             local sbor = item.sbor
@@ -536,6 +552,7 @@ UpdateGUIText = function()
             local classHex = CLASS_COLORS[currentClass] or "ffffff"
             local hexColor = sbor.hexColor or "ff8040"
             local questFullName = sbor.questName or "Задание"
+            local targetQuestID = tonumber(sbor.questID)
 
             local cleanMsg = tostring(auth.msg or "")
             cleanMsg = string.gsub(cleanMsg, "|Hquest:.-|h%[.-%]|h", ""):gsub("|Hquest:.-|h.-|h", "")
@@ -545,28 +562,31 @@ UpdateGUIText = function()
             if cleanMsg == "" then cleanMsg = "Ищет группу" end
 
             local charProgressStrings = {}
-            local normalizedTargetDesc = string.gsub(string.lower(questFullName), "%s+", ""):gsub("ежедневноезадание:", ""):gsub("сезонноезадание:", ""):gsub("%[", ""):gsub("%]", "")
 
-            for charKey, data in pairs(SirusBPTrackerDB) do
-                if charKey ~= "FRAME_DUMP" and charKey ~= "QUEST_LFG" then
-                    local charName = string.match(charKey, "([^-]+)") or charKey
-                    charName = charName:gsub("%s+", "")
+            -- СОБИРАЕМ ПЕРВЫЕ ЦВЕТНЫЕ БУКВЫ ИМЕН ТВИНКОВ ПО ЧИСЛОВЫМ ID КВЕСТОВ
+            local currentRealm = GetRealmName()
+            local realmData = ramCacheDB[currentRealm] -- Читаем из быстрого ОЗУ-кэша твинков
+            if realmData and targetQuestID then
+                for charName, data in pairs(realmData) do
                     if SirusBPTrackerCharFilterDB[charName] ~= false and data.quests then
-                        for _, q in ipairs(data.quests) do
-                            if string.gsub(string.lower(q.text or ""), "%s+", "") == normalizedTargetDesc then
-                                local cHex = CLASS_COLORS[data.class or ""] or "ffffff"
-                                local pStr = (q.progress == "Завершено") and "|cff00ff00Вып!|r" or "|cff00ff00" .. q.progress .. "|r"
-                                table.insert(charProgressStrings, string.format("|cff%s%s|r(%s)", cHex, charName, pStr))
-                                break
-                              end
+                        local q = data.quests[targetQuestID]
+                        if q then
+                            -- Вытаскиваем только первую букву имени (работает корректно с кириллицей UTF-8)
+                            local firstLetter = string.sub(charName, 1, 2) 
+                            local cHex = CLASS_COLORS[data.class or ""] or "ffffff"
+                            
+                            -- Добавляем в массив раскрашенную букву твинка
+                            table.insert(charProgressStrings, string.format("|cff%s%s|r", cHex, firstLetter))
                         end
                     end
                 end
             end
 
+            -- Формируем компактный префикс твинков в квадратных скобках
             local twinsLine = ""
             if #charProgressStrings > 0 then
-                twinsLine = " |cff888888[|r" .. table.concat(charProgressStrings, ", ") .. "|cff888888]|r"
+                table.sort(charProgressStrings)
+                twinsLine = "|cff888888[|r" .. table.concat(charProgressStrings, ", ") .. "|cff888888] |r"
             end
 
             local sborLine = sborChild:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
@@ -576,8 +596,9 @@ UpdateGUIText = function()
             sborLine:SetJustifyH("LEFT")
             sborLine:SetNonSpaceWrap(true)
             
-            sborLine:SetText(string.format("|cff888888(%s)|r |cff%s[%s]|r%s |cff%s[%s]|r: |cffffffff\"%s\"|r", 
-                timeStr, hexColor, questFullName, twinsLine, classHex, auth.name, cleanMsg))
+            -- ВЫВОД НА ЭКРАН: Ставим цветные буквы [М, М] строго ПЕРЕД красивым описанием задания
+            sborLine:SetText(string.format("|cff888888(%s)|r %s|cff%s[%s]|r |cff%s[%s]|r: |cffffffff\"%s\"|r", 
+                timeStr, twinsLine, hexColor, questFullName, classHex, auth.name, cleanMsg))
 
             local rowBtn = CreateFrame("Button", "SirusBPSborRowBtn_" .. sborBtnIdx, sborChild)
             rowBtn:SetPoint("TOPLEFT", sborLine, "TOPLEFT", 0, 0)
@@ -593,197 +614,350 @@ UpdateGUIText = function()
                 end
             end)
 
+--sbpt-v227: ЧИСТЫЙ ОЗУ-ТУЛТИП СБОРОВ: МГНОВЕННЫЙ ВЫВОД ТВИНКОВ ПО ЛОКАЛЬНОЙ БАЗЕ БЕЗ ЗАПРОСОВ К СЕРВЕРУ
             rowBtn:SetScript("OnEnter", function(self)
+                if TriggerNinjaScanWithCooldown then TriggerNinjaScanWithCooldown() end
                 GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
                 GameTooltip:ClearLines()
                 
-                local currentQuestID = sbor.questID or "28111"
-                GameTooltip:SetHyperlink("quest:" .. currentQuestID)
-                
-                local rawName = self.questName or "Задание"
-                local isDaily = string.find(string.lower(rawName), "ежедневное")
-                local isSeasonal = string.find(string.lower(rawName), "сезонное")
-                
-                if not isDaily and not isSeasonal then
+                -- Вытаскиваем точный числовой ID квеста созывалы
+                local targetQuestID = tonumber(self.questID) or (sbor and tonumber(sbor.questID))
+                if not targetQuestID then
+                    GameTooltip:AddLine("|cff888888Загрузка данных задания...|r")
                     GameTooltip:Show()
                     return
                 end
                 
-                local line3Obj = _G["GameTooltipTextLeft3"]
-                local serverDesc = line3Obj and line3Obj:GetText() or ""
-                if serverDesc == "" then
-                    local line2Obj = _G["GameTooltipTextLeft2"]
-                    serverDesc = line2Obj and line2Obj:GetText() or ""
+                -- Стандартный тултип Близзард для самого квеста
+                GameTooltip:SetHyperlink("quest:" .. targetQuestID)
+                
+                -- Переменные для анализа принадлежности к Боевому Пропуску
+                local isSirusBPQuest = false
+                local charStrings = {}
+                local currentRealm = GetRealmName()
+                local realmData = ramCacheDB and ramCacheDB[currentRealm]
+                
+                -- ПРАВИЛО 1 и 2: Сканируем только локальное ОЗУ, проверяя флаги типа БП (1 или 2) или наличие в фильтрах
+                if SirusBPTrackerFilterDB and SirusBPTrackerFilterDB[targetQuestID] ~= nil then
+                    isSirusBPQuest = true
                 end
                 
-                local charStrings = {}
-                if serverDesc and serverDesc ~= "" and serverDesc ~= "пусто" then
-                    local normalizedServerTarget = string.gsub(string.lower(serverDesc), "%s+", "")
-                    for charKey, data in pairs(SirusBPTrackerDB) do
-                        if charKey ~= "FRAME_DUMP" and charKey ~= "QUEST_LFG" then
-                            local charName = string.match(charKey, "([^-]+)") or charKey
-                            charName = charName:gsub("%s+", "")
-                            if SirusBPTrackerCharFilterDB[charName] ~= false and data.quests then
-                                for _, q in ipairs(data.quests) do
-                                    local cleanQText = string.gsub(string.lower(q.text or ""), "%s+", "")
-                                    if cleanQText == normalizedServerTarget then
-                                        local hexColor = CLASS_COLORS[data.class or ""] or "ffffff"
-                                        local progStr = (q.progress == "Завершено") and "|cff00ff00Завершено!|r" or "|cff00ff00" .. q.progress .. "|r"
-                                        table.insert(charStrings, string.format("|cff%s%s|r (%s)", hexColor, charName, progStr))
-                                        break
+                if realmData then
+                    for charName, data in pairs(realmData) do
+                        if data.quests then
+                            local q = data.quests[targetQuestID] or data.quests[tostring(targetQuestID)]
+                            if q then
+                                -- Если нашли квест у любого твинка и у него валидный БП-тип (1 или 2) — это точно БП
+                                if q.type == 1 or q.type == 2 then
+                                    isSirusBPQuest = true
+                                end
+                                
+                                -- ПРАВИЛО 3: Если персонаж прошел фильтр видимости, собираем его прогресс
+                                if SirusBPTrackerCharFilterDB[charName] ~= false then
+                                    local hexColor = CLASS_COLORS[data.class or ""] or "ffffff"
+                                    local displayProg = tostring(q.progress or "0/0")
+                                    
+                                    if string.find(displayProg, "/100$") then
+                                        local num = tonumber(string.match(displayProg, "^([%d%.]+)"))
+                                        if num then displayProg = math.floor(num + 0.5) .. "%" end
                                     end
+                                    
+                                    local progStr = (displayProg == "Завершено" or displayProg == "Завершено!") and "|cff00ff00Завершено!|r" or "|cff00ff00" .. displayProg .. "|r"
+                                    table.insert(charStrings, string.format("|cff%s%s|r (%s)", hexColor, charName, progStr))
                                 end
                             end
                         end
                     end
                 end
                 
+                -- ПРАВИЛО 2: Если задание НЕ относится к БП, просто выводим дефолтный тултип и ничего не пишем
+                if not isSirusBPQuest then
+                    GameTooltip:Show()
+                    return
+                end
+                
+                -- Дописываем данные твинков строго для заданий Боевого Пропуска
                 GameTooltip:AddLine(" ")
                 if #charStrings > 0 then
+                    -- ПРАВИЛО 3: Совпадения найдены — выводим красивый упорядоченный список персонажей
                     table.sort(charStrings)
                     GameTooltip:AddLine("|cffffd100Персонажи:|r " .. table.concat(charStrings, ", "), 1, 1, 1, true)
                 else
+                    -- ПРАВИЛО 4: Это точно БП квест, но совпадений в ОЗУ нет — пишем, что отсутствует у всех
                     GameTooltip:AddLine("|cff888888Задание отсутствует у всех персонажей|r", 1, 1, 1, true)
                 end
+                
                 GameTooltip:Show()
             end)
---sbpt-v143-tooltip-leave-fix: ЖЕСТКИЙ ФИКС ЗАВИСАНИЯ ПОДСКАЗКИ ПРИ УВОДЕ МЫШИ
-                    rowBtn:SetScript("OnLeave", function(self)
-                        GameTooltip:Hide() -- Моментально прячем тултип, как только мышь ушла со строки!
-                    end)
---sbpt-v143-tooltip-leave-fix: КОНЕЦ ФИКСА
+
+
+            rowBtn:SetScript("OnLeave", function(self)
+                GameTooltip:Hide()
+            end)
 
             yOffset = yOffset - (sborLine:GetStringHeight() + 8)
             table.insert(sborChild.widgets, sborLine)
             table.insert(sborChild.widgets, rowBtn)
         end
-        
         sborChild:SetHeight(math.abs(yOffset) + 20)
-    end -- Конец блока "if activeTab == 2 and sborChild then"
- -- КОНЕЦ ГЛАВНОЙ ФУНКЦИИ UPDATEGUITEXT
---sbpt-v136-flat-chrono-sort: КОНЕЦ ФИКСА ФАЙЛА
-
-
-
-
---sbpt-v53-safe-ui: ФРАГМЕНТ 2 ИЗ 2 ОБНОВЛЕННОЙ ОТРИСОВКИ (СПИСОК ПЕРСОНАЖЕЙ)
-    -- ========================================================================
-    -- ЛОГИКА ВКЛАДКИ 1: СТАНДАРТНЫЙ СПИСОК КВЕСТОВ ПЕРСОНАЖЕЙ
-    -- ========================================================================
-    local categories = { ["Ежедневные"] = {}, ["Сезонные"] = {} }
-    local stats = { ["Ежедневные"] = {}, ["Сезонные"] = {} }
-    
-    for charKey, data in pairs(SirusBPTrackerDB) do
-        if charKey ~= "FRAME_DUMP" and charKey ~= "QUEST_LFG" then
-            local name = string.match(charKey, "([^-]+)") or charKey
-            name = name:gsub("%s+", "")
-            
-            if SirusBPTrackerCharFilterDB[name] ~= false and data.quests then
-                for _, q in ipairs(data.quests) do
-                    local cat = q.block or "Сезонные"
-                    if cat ~= "Ежедневные" and cat ~= "Сезонные" then cat = "Сезонные" end
-                    
-                    if not stats[cat][name] then
-                        stats[cat][name] = { total = 0, completed = 0, class = data.class }
-                    end
-                    stats[cat][name].total = stats[cat][name].total + 1
-                    if q.progress == "Завершено" then
-                        stats[cat][name].completed = stats[cat][name].completed + 1
-                    end
-
-                    if SirusBPTrackerFilterDB[q.text] ~= false then
-                        if not categories[cat] then categories[cat] = {} end
-                        if not categories[cat][q.text] then categories[cat][q.text] = {} end
-                        table.insert(categories[cat][q.text], { name = name, class = data.class, progress = q.progress })
-                    end
-                end
-            end
-        end
     end
+-- КОНЕЦ ОБНОВЛЕННОГО БЛОКА ВКЛАДКИ СБОРОВ ЧАТА
 
-    local yOffset = -5
-    local order = {"Ежедневные", "Сезонные"}
-    local hasAnyData = false
+     -- ========================================================================
+    -- ЛОГИКА ВКЛАДКИ 1: СТАНДАРТНЫЙ СПИСОК КВЕСТОВ ПЕРСОНАЖЕЙ (ИНТЕРАКТИВНЫЙ МОНОЛИТ)
+    -- ========================================================================
+    if activeTab == 1 and child then
+        local categories = { ["Ежедневные"] = {}, ["Сезонные"] = {} }
+        local stats = { ["Ежедневные"] = {}, ["Сезонные"] = {} }
+        
+        local currentRealm = GetRealmName()
+        local realmData = ramCacheDB[currentRealm]
+        
+        if realmData then
+            for name, data in pairs(realmData) do
+                if SirusBPTrackerCharFilterDB[name] ~= false and data.quests then
+                    for questID, q in pairs(data.quests) do
+                        local cat = "Сезонные"
+                        if q.type == 1 then cat = "Ежедневные" end
+                        
+                        if not stats[cat][name] then
+                            stats[cat][name] = { total = 0, completed = 0, class = data.class }
+                        end
+                        stats[cat][name].total = stats[cat][name].total + 1
+                        if q.progress == "Завершено" or q.progress == "Завершено!" then
+                            stats[cat][name].completed = stats[cat][name].completed + 1
+                        end
 
-    for _, catName in ipairs(order) do
-        local questList = categories[catName]
-        if stats[catName] and next(stats[catName]) then
-            local searchText = ""
-            if SirusBPSearchBox then searchText = string.lower(SirusBPSearchBox:GetText() or "") end
-
-            local hasMatchingQuests = false
-            if questList then
-                for questText in pairs(questList) do
-                    if searchText == "" or string.find(string.lower(questText), searchText, 1, true) then
-                        hasMatchingQuests = true
-                        break
-                    end
-                end
-            end
-
-            if hasMatchingQuests then
-                hasAnyData = true
-                
-                local catFs = AcquireFontString(child, "GameFontNormalLarge", 0, 1, 1, "LEFT", 440, 10, yOffset)
-                catFs:SetText("=== " .. catName .. " ===")
-                yOffset = yOffset - (catFs:GetStringHeight() + 3)
-
-                local statStrings = {}
-                for charName, charStat in pairs(stats[catName]) do
-                    local hexColor = CLASS_COLORS[charStat.class or ""] or "ffffff"
-                    table.insert(statStrings, string.format("|cff%s%s|r (|cffffffff%d/%d|r)", 
-                        hexColor, charName, charStat.completed, charStat.total))
-                end
-                if #statStrings > 0 then
-                    local statLine = table.concat(statStrings, ", ")
-                    local statFs = AcquireFontString(child, "GameFontNormalSmall", 1, 1, 1, "LEFT", 440, 15, yOffset)
-                    statFs:SetText(statLine)
-                    yOffset = yOffset - (statFs:GetStringHeight() + 10)
-                end
-
-                if questList then
-                    for questText, characters in pairs(questList) do
-                        if searchText == "" or string.find(string.lower(questText), searchText, 1, true) then
-                            local qFs = AcquireFontString(child, "GameFontHighlight", 1, 0.82, 0, "LEFT", 430, 15, yOffset)
-                            qFs:SetText("• " .. questText)
-                            yOffset = yOffset - (qFs:GetStringHeight() + 3)
-                            
-                            local charStrings = {}
-                            for _, char in ipairs(characters) do
-                                local hexColor = CLASS_COLORS[char.class or ""] or "ffffff"
-                                local progStr = char.progress == "Завершено" and "|cff00ff00Завершено!|r" or "|cff00ff00" .. char.progress .. "|r"
-                                table.insert(charStrings, string.format("|cff%s%s|r - %s", hexColor, char.name, progStr))
-                            end
-                            if #charStrings > 0 then
-                                table.sort(charStrings)
-                                local blockLine = table.concat(charStrings, ", ")
-                                local cFs = AcquireFontString(child, "GameFontNormalSmall", nil, nil, nil, "LEFT", 410, 30, yOffset)
-                                cFs:SetText(blockLine)
-                                yOffset = yOffset - (cFs:GetStringHeight() + 5)
-                            end
-                            yOffset = yOffset - 3
+                        local displayName = q.desc or q.text or "Задание БП"
+                        
+                        -- sbpt-v199: Жесткая и правильная фильтрация квестов в настройках по числовому ID
+                        local targetNumID = tonumber(questID) or tonumber(q.id)
+                        if not targetNumID or SirusBPTrackerFilterDB[targetNumID] ~= false then
+                            if not categories[cat] then categories[cat] = {} end
+                            if not categories[cat][displayName] then categories[cat][displayName] = {} end
+                            table.insert(categories[cat][displayName], { 
+                                name = name, 
+                                class = data.class, 
+                                progress = q.progress,
+                                questID = targetNumID,
+                                rawQuest = q
+                            })
                         end
                     end
                 end
-                yOffset = yOffset - 12
             end
         end
-    end
 
-    if not hasAnyData then
-        local emptyFs = AcquireFontString(child, "GameFontNormal", 0.7, 0.7, 0.7, "LEFT", 440, 10, yOffset)
-        emptyFs:SetText("База данных пуста или совпадений не найдено.")
-        yOffset = yOffset - (emptyFs:GetStringHeight() + 10)
+        local yOffset = -5
+        local order = {"Ежедневные", "Сезонные"}
+        local hasAnyData = false
+
+        for _, catName in ipairs(order) do
+            local questList = categories[catName]
+            if stats[catName] and next(stats[catName]) then
+                local searchText = ""
+                if SirusBPSearchBox then searchText = string.lower(SirusBPSearchBox:GetText() or "") end
+
+                local hasMatchingQuests = false
+                if questList then
+                    for questText in pairs(questList) do
+                        if searchText == "" or string.find(string.lower(questText), searchText, 1, true) then
+                            hasMatchingQuests = true
+                            break
+                        end
+                    end
+                end
+
+                if hasMatchingQuests then
+                    hasAnyData = true
+                    
+                    local catFs = AcquireFontString(child, "GameFontNormalLarge", 0, 1, 1, "LEFT", 440, 10, yOffset)
+                    catFs:SetText("=== " .. catName .. " ===")
+                    yOffset = yOffset - (catFs:GetStringHeight() + 3)
+                    table.insert(child.widgets, catFs)
+
+                    local statStrings = {}
+                    for charName, charStat in pairs(stats[catName]) do
+                        local hexColor = CLASS_COLORS[charStat.class or ""] or "ffffff"
+                        table.insert(statStrings, string.format("|cff%s%s|r (|cffffffff%d/%d|r)", 
+                            hexColor, charName, charStat.completed, charStat.total))
+                    end
+                    if #statStrings > 0 then
+                        local statLine = table.concat(statStrings, ", ")
+                        local statFs = AcquireFontString(child, "GameFontNormalSmall", 1, 1, 1, "LEFT", 440, 15, yOffset)
+                        statFs:SetText(statLine)
+                        yOffset = yOffset - (statFs:GetStringHeight() + 10)
+                        table.insert(child.widgets, statFs)
+                    end
+
+                    if questList then
+                        for questText, characters in pairs(questList) do
+                            if searchText == "" or string.find(string.lower(questText), searchText, 1, true) then
+--sbpt-v202: ИСПРАВЛЕННЫЙ ВЫВОД SHIFT-ЛИНКА С ЖЕСТКОЙ ФИКСАЦИЕЙ ЧИСЛОВЫХ ID КВЕСТОВ ИЗ ОЗУ
+                                local qFs = AcquireFontString(child, "GameFontHighlight", 1, 0.82, 0, "LEFT", 430, 15, yOffset)
+                                qFs:SetText("• " .. questText)
+                                
+                                -- Создаем интерактивную кнопку на названии квеста
+                                local questClickBtn = CreateFrame("Button", nil, child)
+                                questClickBtn:SetPoint("TOPLEFT", qFs, "TOPLEFT", -5, 2)
+                                questClickBtn:SetPoint("BOTTOMRIGHT", qFs, "BOTTOMRIGHT", 5, -2)
+                                questClickBtn:RegisterForClicks("LeftButtonUp")
+                                
+                                questClickBtn:SetScript("OnEnter", function()
+                                    qFs:SetTextColor(0, 0.7, 1, 1) -- Голубой ховер
+                                end)
+                                questClickBtn:SetScript("OnLeave", function()
+                                    qFs:SetTextColor(1, 0.82, 0, 1) -- Золотой исходный
+                                end)
+                                
+                                yOffset = yOffset - (qFs:GetStringHeight() + 3)
+                                table.insert(child.widgets, qFs)
+                                table.insert(child.widgets, questClickBtn)
+
+                                local charStrings = {}
+                                local exactQuestID = nil
+                                local exactRawQuest = nil
+                                
+                                -- Извлекаем чистые данные квеста напрямую из ОЗУ-кэша твинков
+                                for _, char in ipairs(characters) do
+                                    if char.questID then exactQuestID = tonumber(char.questID) end
+                                    if char.rawQuest then 
+                                        exactRawQuest = char.rawQuest 
+                                        if char.rawQuest.id then exactQuestID = tonumber(char.rawQuest.id) end
+                                    end
+                                    
+                                    local hexColor = CLASS_COLORS[char.class or ""] or "ffffff"
+                                    local currentProgressText = tostring(char.progress or "0/0")
+                                    if string.find(currentProgressText, "/100$") then
+                                        local num = tonumber(string.match(currentProgressText, "^([%d%.]+)"))
+                                        if num then currentProgressText = math.floor(num + 0.5) .. "%" end
+                                    end
+                                    
+                                    local progStr = "|cff00ff00" .. currentProgressText .. "|r"
+                                    if currentProgressText == "Завершено" or currentProgressText == "Завершено!" then
+                                        progStr = "|cff00ff00Завершено!|r"
+                                    end
+                                    
+                                    table.insert(charStrings, string.format("|cff%s%s|r - %s", hexColor, char.name, progStr))
+                                end
+
+                                -- Намертво фиксируем переменные и вычисляем правильный ID категории Сируса (:82/:83)
+                                local capturedQuestID = exactQuestID or 28113
+                                local capturedQuestText = questText or "Задание БП"
+                                local capturedRawQuest = exactRawQuest
+                                
+                                local sirusTypeParam = 83 -- По умолчанию ставим 83 (Сезонное)
+                                if capturedRawQuest and capturedRawQuest.type == 1 then
+                                    sirusTypeParam = 82 -- Выставляем 82 для Ежедневных заданий Сируса
+                                elseif string.find(string.lower(capturedQuestText), "ежедневное") then
+                                    sirusTypeParam = 82
+                                end
+                                
+--sbpt-v223: МOНОЛИТ СКРИПТА КЛИКА: УСТРАНЕНА ОШИБКА СКОБОК 876, ЖЕСТКИЙ КАНАЛ [4. МИР] ДЛЯ ELVUI
+                                questClickBtn:SetScript("OnClick", function()
+                                    -- МЕХАНИКА А: Shift+Клик по названию открывает /4 Мир и шлет оригинальный линк БП Сируса
+                                    if IsShiftKeyDown() then
+                                        -- Ищем канал "Мир", если не найден - резервный "ПоискСпутников", иначе дефолт 4
+                                        local channelNum = GetChannelName("Мир")
+                                        if not channelNum or channelNum == 0 then 
+                                            channelNum = GetChannelName("ПоискСпутников")
+                                        end
+                                        
+                                        local finalChannel = (channelNum and channelNum > 0) and channelNum or 4
+                                        ChatFrame_OpenChat("/" .. finalChannel .. " ", DEFAULT_CHAT_FRAME)
+                                        
+                                        -- Локальный буфер для передачи данных внутрь покадрового триггера
+                                        local l_capturedQuestID = exactQuestID or 28113
+                                        local l_capturedQuestText = questText or "Задание БП"
+                                        local l_capturedRawQuest = exactRawQuest
+                                        
+                                        -- Запускаем покадровый триггер задержки, чтобы чат ElvUI успел получить фокус ввода
+                                        local delayFrame = CreateFrame("Frame")
+                                        local frameElapsed = 0
+                                        delayFrame:SetScript("OnUpdate", function(self, elapsed)
+                                            frameElapsed = frameElapsed + elapsed
+                                            if frameElapsed >= 0.02 then
+                                                self:SetScript("OnUpdate", nil) -- Выключаем таймер кадра
+                                                
+                                                local editBox = ChatEdit_GetActiveWindow and ChatEdit_GetActiveWindow() or LAST_ACTIVE_CHAT_EDIT_BOX or (DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.editBox)
+                                                if editBox then
+                                                    editBox:Show()
+                                                    editBox:SetFocus()
+                                                    
+                                                    -- Извлекаем чистое короткое название квеста из ОЗУ
+                                                    local finalShortTitle = tostring(l_capturedQuestText)
+                                                    if l_capturedRawQuest and l_capturedRawQuest.text and l_capturedRawQuest.text ~= "" then
+                                                        finalShortTitle = tostring(l_capturedRawQuest.text)
+                                                    end
+                                                    
+                                                    -- Выставляем скрытый тип задания БП Сируса (83)
+                                                    local sirusTypeParam = 83
+                                                    if l_capturedRawQuest and l_capturedRawQuest.type == 1 then 
+                                                        sirusTypeParam = 82 
+                                                    elseif string.find(string.lower(finalShortTitle), "ежедневное") then
+                                                        sirusTypeParam = 82
+                                                    end
+                                                    
+                                                    -- СБОРКА ОРИГИНАЛЬНОГО ХЭША: Родной оранжевый цвет БП, ведущий пробел (код 32) по дампу!
+                                                    local colorHex = "ffff8040"
+                                                    local officialSirusLink = string.format(" |c%s|Hquest:%d:%d|h[%s]|h|r", 
+                                                        colorHex, tonumber(l_capturedQuestID) or 28113, sirusTypeParam, finalShortTitle)
+                                                    
+                                                    editBox:Insert(officialSirusLink .. " ")
+                                                end
+                                            end
+                                        end)
+                                        
+                                    -- МЕХАНИКА Б: Обычный клик по названию со статусом "Завершено" открывает задания БП Сируса
+                                    else
+                                        if capturedRawQuest then
+                                            local currentProgressText = tostring(capturedRawQuest.progress or "0/0")
+                                            if currentProgressText == "Завершено" or currentProgressText == "Завершено!" then
+                                                if ToggleBattlePassFrame then
+                                                    pcall(ToggleBattlePassFrame)
+                                                elseif BattlePassFrame and BattlePassFrame.Show then
+                                                    if not BattlePassFrame:IsShown() then BattlePassFrame:Show() end
+                                                end
+                                                if BattlePassFrame and BattlePassFrameTopPanelQuestPageButton and BattlePassFrameTopPanelQuestPageButton.Click then
+                                                    pcall(BattlePassFrameTopPanelQuestPageButton.Click, BattlePassFrameTopPanelQuestPageButton)
+                                                end
+                                            end
+                                        end
+                                    end
+                                end)
+
+                                if #charStrings > 0 then
+                                    table.sort(charStrings)
+                                    local blockLine = table.concat(charStrings, ", ")
+                                    local cFs = AcquireFontString(child, "GameFontNormalSmall", nil, nil, nil, "LEFT", 410, 30, yOffset)
+                                    cFs:SetText(blockLine)
+                                    yOffset = yOffset - (cFs:GetStringHeight() + 5)
+                                    table.insert(child.widgets, cFs)
+                                end
+                                yOffset = yOffset - 3
+
+                            end
+                        end
+                    end
+                    yOffset = yOffset - 12
+                end
+            end
+        end
+
+        if not hasAnyData then
+            local emptyFs = AcquireFontString(child, "GameFontNormal", 0.7, 0.7, 0.7, "LEFT", 440, 10, yOffset)
+            emptyFs:SetText("База данных пуста или совпадений не найдено.")
+            yOffset = yOffset - (emptyFs:GetStringHeight() + 10)
+            table.insert(child.widgets, emptyFs)
+        end
+        child:SetHeight(math.abs(yOffset) + 20)
     end
-    child:SetHeight(math.abs(yOffset) + 20)
 end
---sbpt-v53-safe-ui: КОНЕЦ ПОЛНОГО МОНОЛИТА ОТРИСОВКИ
 
 
---sbpt-v20-global-buffer: НАЧАЛО ИСПРАВЛЕННОЙ ГЛОБАЛЬНОЙ ЛОВУШКИ ЧАТА С АВТОСОЗДАНИЕМ ФРЕЙМА
+--sbpt-v225: ЛФГ-ПАРСЕР ЧАТА ПИШЕТ СБОРЫ НАПРЯМУЮ В WTF-ФАЙЛ ДЛЯ ИДЕАЛЬНОЙ СИНХРОНИЗАЦИИ С ТУЛТИПАМИ
 chatAuthorsBuffer = chatAuthorsBuffer or {}
 
--- ЖЕСТКАЯ ЗАЩИТА: Если фрейм ловушки чата был удален, создаем его заново на лету!
 if not chatTrackerFrame then
     chatTrackerFrame = CreateFrame("Frame")
     chatTrackerFrame:RegisterEvent("CHAT_MSG_CHANNEL")
@@ -792,7 +966,6 @@ if not chatTrackerFrame then
     chatTrackerFrame:RegisterEvent("CHAT_MSG_GUILD")
 end
 
---sbpt-v129-radar-time-fix: ИСПРАВЛЕННЫЙ РАДАР С ДВОЙНЫМ УЧЕТОМ ВРЕМЕНИ
 local sborUpdateTimer = 0
 chatTrackerFrame:SetScript("OnEvent", function(self, event, ...)
     local arg1, arg2, _, _, _, _, _, _, _, _, _, arg12 = ...
@@ -818,47 +991,56 @@ chatTrackerFrame:SetScript("OnEvent", function(self, event, ...)
             end
         end
 
-        for questID in string.gmatch(arg1, "|Hquest:(%d+)") do
+        for rawQuestID in string.gmatch(arg1, "|Hquest:(%d+)") do
+            local questID = tonumber(rawQuestID)
+            
             if questID then
                 local questTitleName = string.match(arg1, "|h%[([^%]]+)%]")
                 
                 if questTitleName then
-                    local dbKey = NormalizeText(questTitleName)
+                    -- ВОЗВРАЩЕНО: Пишем сборы ЛФГ напрямую в файл жесткого диска SirusBPTrackerDB!
+                    if not SirusBPTrackerDB then SirusBPTrackerDB = {} end
                     if not SirusBPTrackerDB["QUEST_LFG"] then SirusBPTrackerDB["QUEST_LFG"] = {} end
                     
                     local hexColor = "ff8040"
                     local foundQuestHex = string.match(arg1, "|cff(%x%x%x%x%x%x)")
                     if foundQuestHex then hexColor = foundQuestHex end
 
-                    -- ИСПРАВЛЕНО: Общее sbor.time теперь ВСЕГДА обновляется, чтобы table.sort не ломал вывод списка!
-                    SirusBPTrackerDB["QUEST_LFG"][dbKey] = SirusBPTrackerDB["QUEST_LFG"][dbKey] or {
+                    SirusBPTrackerDB["QUEST_LFG"][questID] = SirusBPTrackerDB["QUEST_LFG"][questID] or {
                         questName = questTitleName,
                         questID = questID,
                         hexColor = hexColor,
                         time = time(),
                         authors = {}
                     }
-                    SirusBPTrackerDB["QUEST_LFG"][dbKey].time = time() -- Держим общую сортировку актуальной
-                    SirusBPTrackerDB["QUEST_LFG"][dbKey].questID = questID
-                    SirusBPTrackerDB["QUEST_LFG"][dbKey].hexColor = hexColor
+                    
+                    local currentSbor = SirusBPTrackerDB["QUEST_LFG"][questID]
+                    currentSbor.time = time()
+                    currentSbor.questName = questTitleName
+                    currentSbor.hexColor = hexColor
 
                     local authorExists = false
-                    for _, auth in ipairs(SirusBPTrackerDB["QUEST_LFG"][dbKey].authors) do
-                        if auth.name == arg2 then
-                            auth.msg = arg1
-                            auth.time = time() -- Персональное время автора
-                            if classToken ~= "WHITE" then auth.class = classToken end
-                            authorExists = true
-                            break
+                    
+                    if currentSbor.authors and type(currentSbor.authors) == "table" then
+                        for _, auth in pairs(currentSbor.authors) do
+                            if auth.name == arg2 then
+                                auth.msg = arg1
+                                auth.time = time()
+                                if classToken ~= "WHITE" then auth.class = classToken end
+                                authorExists = true
+                                break
+                            end
                         end
+                    else
+                        currentSbor.authors = {}
                     end
                     
                     if not authorExists then
-                        table.insert(SirusBPTrackerDB["QUEST_LFG"][dbKey].authors, {
+                        table.insert(currentSbor.authors, {
                             name = arg2,
                             msg = arg1,
                             class = classToken,
-                            time = time() -- Персональное время автора
+                            time = time()
                         })
                     end
 
@@ -870,7 +1052,7 @@ chatTrackerFrame:SetScript("OnEvent", function(self, event, ...)
         end
     end
 end)
---sbpt-v129-radar-time-fix: КОНЕЦ ОБНОВЛЕНИЯ РАДАРА
+-- КОНЕЦ ОБНОВЛЕНИЯ ЛФГ-ПАРСЕРА ЧАТА
 
 -- Подключение системных хуков
 GameTooltip:HookScript("OnUpdate", function(self) ProcessSirusBPTooltip(self, false) end)
@@ -905,8 +1087,7 @@ end
 --sbpt-v08-chat-fixes: КОНЕЦ БЛОКА ЧАТА И ХУКОВ
 
 
---****
---sbpt-v02: ПОЛНЫЙ ПРОВЕРЕННЫЙ БЛОК ОКНА ФИЛЬТРОВ (БЕЗ QUEST_LFG И БЕЗ ОШИБОК)
+--sbpt-v185: ЧАСТЬ 1 ИЗ 2 МОНОЛИТА НАСТРОЕК ПОД ОЗУ-КЭШ, ЧИСЛОВЫЕ ID И ПРАВИЛЬНЫЕ ЦВЕТА
 CreateFilterGUI = function()
     if filterGui then return filterGui end
     local fGui = CreateFrame("Frame", "SirusBPFilterGUI", UIParent)
@@ -925,7 +1106,6 @@ CreateFilterGUI = function()
     fGui:SetScript("OnDragStart", fGui.StartMoving) fGui:SetScript("OnDragStop", fGui.StopMovingOrSizing)
     tinsert(UISpecialFrames, "SirusBPFilterGUI")
 
-    -- 1. Новое название окна
     local title = fGui:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     title:SetPoint("TOPLEFT", 16, -14) 
     title:SetText("Настройки")
@@ -933,26 +1113,30 @@ CreateFilterGUI = function()
     local closeBtn = CreateFrame("Button", nil, fGui, "UIPanelCloseButton")
     closeBtn:SetPoint("TOPRIGHT", -3, -3)
 
- -- 2. Кнопка "Очистить БД" теперь аккуратно выровнена справа от заголовка "Настройки"
+    -- Кнопка "Очистить БД" (Очищает и диск, и живое ОЗУ мгновенно)
+--sbpt-v190: ВОССТАНОВЛЕНИЕ ФРЕЙМА КНОПКИ И АБСОЛЮТНОЕ ОБНУЛЕНИЕ БАЗ ДАННЫХ И ОЗУ БЕЗ ХВОСТОВ
     local clearAllBtn = CreateFrame("Button", "SirusBPClearAllBtn", fGui, "UIPanelButtonTemplate")
     clearAllBtn:SetSize(95, 22)
     clearAllBtn:SetPoint("LEFT", title, "RIGHT", 15, -1)
     clearAllBtn:SetText("Очистить БД")
     clearAllBtn:RegisterForClicks("LeftButtonUp")
     clearAllBtn:SetScript("OnClick", function()
-        SirusBPTrackerDB = {}
-        SirusBPTrackerDB["QUEST_LFG"] = {}
-        if chatAuthorsBuffer then chatAuthorsBuffer = {} end
+        -- Полностью уничтожаем все таблицы в файле WTF на жестком диске
+        -- Полностью выжигаем оперативную память (ОЗУ-кэш) аддона
+        ExecuteSBPTDatabaseMigration(true)
+        -- Принудительно командуем интерфейсу перерисовать абсолютно пустые экраны
         if UpdateGUIText then UpdateGUIText() end
-        DEFAULT_CHAT_FRAME:AddMessage("|cffff0000[SirusBP]|r Глобальная база данных полностью очищена! Все персонажи и сборы сброшены.")
+        if fGui.RefreshList then fGui.RefreshList() end
+        
+        DEFAULT_CHAT_FRAME:AddMessage("|cffff0000[SirusBP]|r Глобальная база данных, фильтры и ОЗУ полностью уничтожены! Аддон сброшен к первому запуску.")
     end)
+-- Конец фикса фрейма кнопки очистки
 
-     -- 3. Создаем новую плашку === Сборы === ниже шапки
+
     local sborTitle = fGui:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     sborTitle:SetPoint("TOPLEFT", 16, -44)
     sborTitle:SetText("=== Сборы ===")
 
-    -- Наш единственный умный чекбокс "Только БП сборы" под плашкой
     local showLfgCb = CreateFrame("CheckButton", "SirusBPShowLfgCheckButton", fGui, "InterfaceOptionsCheckButtonTemplate")
     showLfgCb:SetPoint("TOPLEFT", 16, -62)
     
@@ -967,13 +1151,10 @@ CreateFilterGUI = function()
         SirusBPTrackerConfig.OnlyBpSbors = not not self:GetChecked()
         if UpdateGUIText then UpdateGUIText() end
     end)
---sbpt-v99-header-only: КОНЕЦ МИКРОХИРУРГИЧЕСКОЙ ЗАМЕНЫ ШАПКИ
 
-
-    -- 3. КРАСИВЫЙ ИНПУТ ПОИСКА КВЕСТА (Возвращен на самый верх, чтобы окно было красивым!)
     local fSearchBox = CreateFrame("EditBox", "SirusBPFilterSearchBox", fGui)
     fSearchBox:SetSize(120, 20)
-    fSearchBox:SetPoint("TOPRIGHT", fGui, "TOPRIGHT", -35, -14) -- Идеальная координата на уровне заголовка
+    fSearchBox:SetPoint("TOPRIGHT", fGui, "TOPRIGHT", -35, -14)
     fSearchBox:SetAutoFocus(false)
     fSearchBox:SetFontObject("GameFontHighlightSmall")
     fSearchBox:SetTextInsets(6, 6, 0, 0)
@@ -994,7 +1175,6 @@ CreateFilterGUI = function()
     end)
     fSearchBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
     fGui.searchBox = fSearchBox
---sbpt-v32-config-final: КОНЕЦ ИСПРАВЛЕННОЙ ПАНЕЛИ НАСТРОЕК
 
     local scrollFrame = CreateFrame("ScrollFrame", "SirusBPFilterScrollFrame", fGui, "UIPanelScrollFrameTemplate")
     scrollFrame:SetPoint("TOPLEFT", 10, -92) scrollFrame:SetPoint("BOTTOMRIGHT", -30, 10)
@@ -1002,7 +1182,7 @@ CreateFilterGUI = function()
     local scrollChild = CreateFrame("Frame", nil, scrollFrame)
     scrollChild:SetSize(390, 1) scrollFrame:SetScrollChild(scrollChild)
     fGui.scrollChild = scrollChild
-
+-- КОНЕЦ ВЕРХНЕЙ ЧАСТИ ОКНА НАСТРОЕК
     fGui.RefreshList = function()
         local child = fGui.scrollChild
         if child.widgets then
@@ -1018,17 +1198,21 @@ CreateFilterGUI = function()
         local uniqueCharacters = {}
         local questsByCat = { ["Ежедневные"] = {}, ["Сезонные"] = {} }
 
-        for charKey, data in pairs(SirusBPTrackerDB) do
-            -- ЖЕСТКАЯ ЗАЩИТА: Полностью игнорируем технические таблицы сборов и дампов, чтобы они не лезли в ники чаров
-            if charKey ~= "FRAME_DUMP" and charKey ~= "QUEST_LFG" then
-                local name = string.match(charKey, "([^-]+)") or charKey
-                name = name:gsub("%s+", "")
-                uniqueCharacters[name] = data.class or "WARRIOR"
+        -- Собираем данные персонажей и квестов из ОЗУ текущего реалма
+        local currentRealm = GetRealmName()
+        local realmData = ramCacheDB and ramCacheDB[currentRealm]
+        
+        if realmData then
+            for charName, data in pairs(realmData) do
+                uniqueCharacters[charName] = data.class or "WARRIOR"
                 if data.quests then
-                    for _, q in ipairs(data.quests) do
-                        local cat = q.block or "Сезонные"
-                        if cat ~= "Ежедневные" and cat ~= "Сезонные" then cat = "Сезонные" end
-                        questsByCat[cat][q.text] = true
+                    for questID, q in pairs(data.quests) do
+                        local cat = "Сезонные"
+                        if q.type == 1 then cat = "Ежедневные" end
+                        
+                        -- Ключом таблицы квестов делаем числовой ID, а значением - красивое описание
+                        local dispName = q.desc or q.text or "Задание БП"
+                        questsByCat[cat][questID] = dispName
                     end
                 end
             end
@@ -1059,6 +1243,8 @@ CreateFilterGUI = function()
                     SirusBPTrackerCharFilterDB[cName] = self:GetChecked() and true or false
                     if UpdateGUIText then UpdateGUIText() end
                 end)
+                
+                -- Выгружаем точный токен класса из ОЗУ персонажа
                 local classToken = uniqueCharacters[cName]
                 local hexColor = CLASS_COLORS[classToken] or "ffffff"
                 local t = cb.TextLabel or child:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -1070,52 +1256,58 @@ CreateFilterGUI = function()
             fyOffset = fyOffset - 10
         end
 
-        AddHeader("=== Задания ===", 0, 1, 1)
-        fyOffset = fyOffset - 5
-
-        for _, catName in ipairs({"Ежедневные", "Сезонные"}) do
-            local sortedQuests = {}
-            for qText in pairs(questsByCat[catName]) do
-                if fSearchText == "" or string.find(string.lower(qText), fSearchText, 1, true) then
-                    table.insert(sortedQuests, qText)
+        -- Отрисовка списков отслеживания СТРОГО ПО ЧИСЛОВЫМ ID КВЕСТОВ
+        local order = {"Ежедневные", "Сезонные"}
+        for _, catName in ipairs(order) do
+            local hasQuestsInCat = false
+            if questsByCat[catName] then
+                for qID, dispName in pairs(questsByCat[catName]) do
+                    if fSearchText == "" or string.find(string.lower(dispName), fSearchText, 1, true) then
+                        hasQuestsInCat = true
+                        break
+                    end
                 end
             end
-            table.sort(sortedQuests)
 
-            if #sortedQuests > 0 or fSearchText == "" then
-                AddHeader("--- " .. catName .. " ---", 0.7, 0.7, 0.7)
-
-                if #sortedQuests == 0 and fSearchText == "" then
-                    local emptyFs = child:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-                    emptyFs:SetPoint("TOPLEFT", 25, fyOffset) emptyFs:SetText("Нет обнаруженных заданий")
-                    fyOffset = fyOffset - 20 table.insert(child.widgets, emptyFs)
-                else
-                    for _, qText in ipairs(sortedQuests) do
-                        if SirusBPTrackerFilterDB[qText] == nil then SirusBPTrackerFilterDB[qText] = true end
-                        local cbName = "SirusBPQuestCB_" .. widgetIdx
-                        local cb = _G[cbName] or CreateFrame("CheckButton", cbName, child, "InterfaceOptionsCheckButtonTemplate")
-                        cb:SetParent(child) cb:ClearAllPoints() cb:SetPoint("TOPLEFT", 20, fyOffset) cb:Show()
-                        cb:SetChecked(SirusBPTrackerFilterDB[qText])
-                        cb:SetScript("OnClick", function(self)
-                            SirusBPTrackerFilterDB[qText] = self:GetChecked() and true or false
-                            if UpdateGUIText then UpdateGUIText() end
-                        end)
-
-                        local t = cb.TextLabel or child:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-                        cb.TextLabel = t t:ClearAllPoints() t:SetPoint("LEFT", cb, "RIGHT", 5, 1)
-                        t:SetWidth(330) t:SetJustifyH("LEFT") t:SetText(qText) t:Show()
-
-                        local textHeight = t:GetStringHeight()
-                        local spacing = (textHeight > 16) and (textHeight + 12) or 26
-                        fyOffset = fyOffset - spacing
-                        
-                        widgetIdx = widgetIdx + 1
-                        table.insert(child.widgets, cb) table.insert(child.widgets, t)
+            if hasQuestsInCat and questsByCat[catName] then
+                AddHeader("=== " .. catName .. " ===", 0, 1, 1)
+                
+                -- Сортируем квесты по их красивым названиям для алфавитного порядка галочек
+                local sortedQuests = {}
+                for qID, dispName in pairs(questsByCat[catName]) do
+                    if fSearchText == "" or string.find(string.lower(dispName), fSearchText, 1, true) then
+                        table.insert(sortedQuests, { id = qID, text = dispName })
                     end
+                end
+                table.sort(sortedQuests, function(a, b) return a.text < b.text end)
+
+                for _, qInfo in ipairs(sortedQuests) do
+                    local qID = qInfo.id
+                    local dispName = qInfo.text
+                    
+                    if SirusBPTrackerFilterDB[qID] == nil then SirusBPTrackerFilterDB[qID] = true end
+                    
+                    local cbName = "SirusBPQuestCB_" .. widgetIdx
+                    local cb = _G[cbName] or CreateFrame("CheckButton", cbName, child, "InterfaceOptionsCheckButtonTemplate")
+                    cb:SetParent(child) cb:ClearAllPoints() cb:SetPoint("TOPLEFT", 15, fyOffset) cb:Show()
+                    cb:SetChecked(SirusBPTrackerFilterDB[qID] ~= false)
+                    
+                    cb:SetScript("OnClick", function(self)
+                        SirusBPTrackerFilterDB[qID] = self:GetChecked() and true or false
+                        if UpdateGUIText then UpdateGUIText() end
+                    end)
+
+                    local t = cb.TextLabel or child:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                    cb.TextLabel = t t:ClearAllPoints() t:SetPoint("LEFT", cb, "RIGHT", 5, 1)
+                    t:SetText(dispName) t:Show()
+                    
+                    fyOffset = fyOffset - 26 widgetIdx = widgetIdx + 1
+                    table.insert(child.widgets, cb) table.insert(child.widgets, t)
                 end
                 fyOffset = fyOffset - 10
             end
         end
+
         child:SetHeight(math.abs(fyOffset) + 15)
     end
     fGui:SetScript("OnShow", fGui.RefreshList)
@@ -1123,7 +1315,7 @@ CreateFilterGUI = function()
     filterGui = fGui
     return filterGui
 end
---sbpt-v02: КОНЕЦ ПОЛНОГО БЛОКА ОКНА ФИЛЬТРОВ
+
 --sbpt-v139-donate-fixed: ЖЕСТКИЙ ФИКС НАЛОЖЕНИЯ ТЕКСТА И ТЕКСТУРЫ QR-КОДА
 CreateHelpGUI = function()
     if helpGui then return helpGui end
@@ -1199,7 +1391,6 @@ end
 --sbpt-v139-donate-fixed: КОНЕЦ ОБНОВЛЕНИЯ
 
 
-
 local function CreateMinimapButton()
     if SirusBPMinimapButton then return end
     local button = CreateFrame("Button", "SirusBPMinimapButton", Minimap)
@@ -1232,10 +1423,18 @@ local function CreateMinimapButton()
     button:SetScript("OnDragStop", function(self) self:UnlockHighlight() self:SetScript("OnUpdate", nil) end)
     button:SetScript("OnClick", function(self, btn)
         if btn == "LeftButton" then
+            if ExecuteSilentBPScan then ExecuteSilentBPScan(true) end
+            -- СБРОС НА ДИСК: Кликнули на лапу — фиксируем ОЗУ в WTF-файл перед выводом
+            if SaveRAMCacheToDisk then SaveRAMCacheToDisk() end
+
             local gui = CreateMainGUI()
-            if gui:IsShown() then gui:Hide() else UpdateGUIText() gui:Show() end
+            if gui:IsShown() then gui:Hide() else if UpdateGUIText then UpdateGUIText() end gui:Show() end
         end
     end)
+
+--sbpt-v166-lapa-debug: КОНЕЦ ФИКСА КЛИКА ЛАПЫ
+
+
     button:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_LEFT") GameTooltip:AddLine("Sirus BP Tracker", 1, 1, 1)
         GameTooltip:AddLine("|cff00ff00ЛКМ:|r Открыть/Закрыть окно", 0.8, 0.8, 0.8) GameTooltip:Show()
@@ -1244,17 +1443,79 @@ local function CreateMinimapButton()
     UpdatePosition()
 end
 
+--sbpt-v242: ДВУХРУБЕЖНЫЙ АВТОЗАПУСК МИГРАЦИИ 1.1: СРАБАТЫВАЕТ И ПРИ ЗАГРУЗКЕ АДДОНА, И ПРИ КАЖДОМ РЕЛОАДЕ (/RELOAD)
+frame:RegisterEvent("PLAYER_ENTERING_WORLD") -- Дополнительно регистрируем триггер релоада
+
 frame:SetScript("OnEvent", function(self, event, arg1, ...)
+    -- РУБЕЖ 1: Срабатывает один раз при первоначальной загрузке SavedVariables с диска
     if event == "ADDON_LOADED" and arg1 == "SirusBPTracker" then
         if not SirusBPTrackerDB then SirusBPTrackerDB = {} end
+        if not SirusBPTrackerVersionDB then SirusBPTrackerVersionDB = {} end
         if not SirusBPTrackerFilterDB then SirusBPTrackerFilterDB = {} end
         if not SirusBPTrackerCharFilterDB then SirusBPTrackerCharFilterDB = {} end
         if not SirusBPTrackerConfig then SirusBPTrackerConfig = { minimapPos = 45 } end
+        
+        -- Вызываем бесшумную проверку версии структуры ДО наполнения ОЗУ-кэша
+        if ExecuteSBPTDatabaseMigration then
+            ExecuteSBPTDatabaseMigration(false)
+        end
+        
+        -- Копируем чистые данные из файла WTF в ОЗУ-кэш при загрузке аддона
+        if SirusBPTrackerDB then
+            for k, v in pairs(SirusBPTrackerDB) do
+                if type(v) == "table" then
+                    ramCacheDB[k] = {}
+                    for charName, charData in pairs(v) do
+                        if type(charData) == "table" then
+                            ramCacheDB[k][charName] = {
+                                name = charData.name,
+                                class = charData.class,
+                                quests = {}
+                            }
+                            if charData.quests then
+                                for qID, qData in pairs(charData.quests) do
+                                    ramCacheDB[k][charName].quests[qID] = {
+                                        id = qData.id,
+                                        type = qData.type,
+                                        text = qData.text,
+                                        desc = qData.desc,
+                                        progress = qData.progress
+                                    }
+                                end
+                            end
+                        end
+                    end
+                else
+                    ramCacheDB[k] = v
+                end
+            end
+        end
+		
         CreateMinimapButton()
-        print("|cff00ff00[SirusBPTracker]|r Успешно загружен!")
+        
+    -- РУБЕЖ 2 (СТРАХОВОЧНЫЙ): Автоматически срабатывает при КАЖДОМ релоаде (/reload) и входе в мир
+    elseif event == "PLAYER_ENTERING_WORLD" then
+        -- 1. Контрольная бесшумная проверка версии структуры после загрузки мира
+        if ExecuteSBPTDatabaseMigration then
+            ExecuteSBPTDatabaseMigration(false)
+        end
+        
+        -- 2. ИСПРАВЛЕНО: Принудительно запускаем тихий скан БП, чтобы мгновенно наполнить пустую базу квестами текущего чара!
+        if ExecuteSilentBPScan then
+            ExecuteSilentBPScan(true)
+        end
+        
+        -- 3. Принудительно заставляем графический движок обновить текст на вкладках
+        if UpdateGUIText then
+            UpdateGUIText()
+        end
+		
     end
 end)
 
+
+--sbpt-v197: ОТКЛЮЧЕНИЕ СТАРОГО ГРАФИЧЕСКОГО ТАЙМЕРА ОБНОВЛЕНИЯ СКРАПЕРА ОКНА СИРУСА
+--[[
 local tickerFrame = CreateFrame("Frame")
 tickerFrame:SetScript("OnUpdate", function(self, elapsed)
     self.timer = (self.timer or 0) + elapsed
@@ -1266,6 +1527,8 @@ tickerFrame:SetScript("OnUpdate", function(self, elapsed)
         end
     end
 end)
+]]
+-- Конец комментирования старого таймера
 
 SLASH_SIRUSBPVIEW1 = "/bp"
 SlashCmdList["SIRUSBPVIEW"] = function()
@@ -1281,7 +1544,7 @@ function NormalizeText(text)
     return string.gsub(string.lower(text), "%s+", "")
 end
 
--- Единый движок отрисовки для ЛЮБОГО окна (Прогресс твинков)
+--sbpt-v231: АДАПТАЦИЯ ОРИГИНАЛЬНОГО ДВИЖКА ТУЛТИПОВ ПОД СТРУКТУРУ ОПИСАНИЙ И ОЗУ-КЭШ RAMCACHEDB
 function ProcessSirusBPTooltip(self, isClickWindow)
     if not self or not self:IsShown() then return end
     
@@ -1337,18 +1600,27 @@ function ProcessSirusBPTooltip(self, isClickWindow)
         end
 
         local normalizedTooltipDesc = NormalizeText(realQuestDescription)
-
         local charStrings = {}
-        for charKey, data in pairs(SirusBPTrackerDB) do
-            if charKey ~= "FRAME_DUMP" and charKey ~= "QUEST_LFG" then
-                local charName = string.match(charKey, "([^-]+)") or charKey
-                charName = charName:gsub("%s+", "")
-                
+
+        -- ИСПРАВЛЕНО: Переводим перебор на наш быстрый, каскадный ОЗУ-кэш ramCacheDB по текущему реалму
+        local currentRealm = GetRealmName()
+        local realmData = ramCacheDB and ramCacheDB[currentRealm]
+        
+        if realmData then
+            for charName, data in pairs(realmData) do
                 if SirusBPTrackerCharFilterDB[charName] ~= false and data.quests then
-                    for _, q in ipairs(data.quests) do
-                        if NormalizeText(q.text) == normalizedTooltipDesc then
+                    for _, q in pairs(data.quests) do
+                        -- ИСПРАВЛЕНО: Сверяем описание и с q.text, и с q.desc, убирая слепоту тултипа!
+                        if NormalizeText(q.desc or "") == normalizedTooltipDesc or NormalizeText(q.text or "") == normalizedTooltipDesc then
                             local hexColor = CLASS_COLORS[data.class or ""] or "ffffff"
-                            local progStr = (q.progress == "Завершено") and "|cff00ff00Завершено!|r" or "|cff00ff00" .. q.progress .. "|r"
+                            
+                            local displayProg = tostring(q.progress or "0/0")
+                            if string.find(displayProg, "/100$") then
+                                local num = tonumber(string.match(displayProg, "^([%d%.]+)"))
+                                if num then displayProg = math.floor(num + 0.5) .. "%" end
+                            end
+                            
+                            local progStr = (displayProg == "Завершено" or displayProg == "Завершено!") and "|cff00ff00Завершено!|r" or "|cff00ff00" .. displayProg .. "|r"
                             table.insert(charStrings, string.format("|cff%s%s|r (%s)", hexColor, charName, progStr))
                             break
                         end
@@ -1359,6 +1631,7 @@ function ProcessSirusBPTooltip(self, isClickWindow)
 
         self:AddLine(" ")
         if #charStrings > 0 then
+            table.sort(charStrings)
             self:AddLine("|cffffd100Персонажи:|r " .. table.concat(charStrings, ", "), 1, 1, 1, true)
             
             -- Запись в базу сборов происходит СТРОГО по клику в чате
@@ -1368,9 +1641,10 @@ function ProcessSirusBPTooltip(self, isClickWindow)
                 
                 local chatData = chatAuthorsBuffer[searchKey]
                 if chatData and chatData.name then
+                    if not SirusBPTrackerDB then SirusBPTrackerDB = {} end
                     if not SirusBPTrackerDB["QUEST_LFG"] then SirusBPTrackerDB["QUEST_LFG"] = {} end
                     
-                    local dbKey = normalizedTooltipDesc
+                    local dbKey = realQuestDescription or questTitleName
                     SirusBPTrackerDB["QUEST_LFG"][dbKey] = SirusBPTrackerDB["QUEST_LFG"][dbKey] or {
                         questName = realQuestDescription,
                         time = time(),
@@ -1379,13 +1653,17 @@ function ProcessSirusBPTooltip(self, isClickWindow)
                     SirusBPTrackerDB["QUEST_LFG"][dbKey].time = time()
                     
                     local authorExists = false
-                    for _, auth in ipairs(SirusBPTrackerDB["QUEST_LFG"][dbKey].authors) do
-                        if auth.name == chatData.name then
-                            auth.msg = chatData.msg
-                            auth.class = chatData.class or "WHITE"
-                            authorExists = true
-                            break
+                    if SirusBPTrackerDB["QUEST_LFG"][dbKey].authors then
+                        for _, auth in ipairs(SirusBPTrackerDB["QUEST_LFG"][dbKey].authors) do
+                            if auth.name == chatData.name then
+                                auth.msg = chatData.msg
+                                auth.class = chatData.class or "WHITE"
+                                authorExists = true
+                                break
+                            end
                         end
+                    else
+                        SirusBPTrackerDB["QUEST_LFG"][dbKey].authors = {}
                     end
                     
                     if not authorExists then
@@ -1404,6 +1682,7 @@ function ProcessSirusBPTooltip(self, isClickWindow)
         self:Show()
     end
 end
+
 
 -- Подключение системных хуков подсказок
 GameTooltip:HookScript("OnUpdate", function(self) ProcessSirusBPTooltip(self, false) end)
@@ -1485,7 +1764,239 @@ function SetItemRef(link, text, button, chatFrame)
     end
 end
 
+-- Функция принудительного сохранения ОЗУ-кэша в WTF-файл на жесткий диск
+--sbpt-v191: ТАЙМЕР ДИСКА РАБОТАЕТ СТРОГО С ПЕРСОНАЖАМИ, НЕ ТРОГАЯ ПРЯМУЮ ЗАПИСЬ ЛФГ-СБОРОВ
+function SaveRAMCacheToDisk()
+    if InCombatLockdown() or not ramCacheDB then return end
+    if not SirusBPTrackerDB then SirusBPTrackerDB = {} end
+    
+    -- СОХРАНЯЕМ ПЕРСОНАЖЕЙ: Каскадный сброс твинков по реалмам на жесткий диск из ОЗУ
+    for realm, chars in pairs(ramCacheDB) do
+        if realm ~= "FRAME_DUMP" and realm ~= "QUEST_LFG" and type(chars) == "table" then
+            if not SirusBPTrackerDB[realm] then SirusBPTrackerDB[realm] = {} end
+            for name, data in pairs(chars) do
+                if type(data) == "table" then
+                    if not SirusBPTrackerDB[realm][name] then SirusBPTrackerDB[realm][name] = {} end
+                    local diskChar = SirusBPTrackerDB[realm][name]
+                    diskChar.name = data.name
+                    diskChar.class = data.class
+                    diskChar.quests = {}
+                    if data.quests then
+                        for qID, qData in pairs(data.quests) do
+                            diskChar.quests[qID] = {
+                                id = qData.id,
+                                type = qData.type,
+                                text = qData.text,
+                                desc = qData.desc,
+                                progress = qData.progress
+                            }
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
 
 
+--sbpt-v164-pure-memory-core: МГНОВЕННЫЙ И БЕСШУМНЫЙ СБОР ДАННЫХ ИЗ НАПРАВЛЕННОЙ ПАМЯТИ СИРУСА
+local lastScanTime = 0
 
+function ExecuteSilentBPScan(force) 
+    if not C_BattlePass then 
+        print("|cffff0000[SBPT-MEM-DEBUG] Критическая ошибка: C_BattlePass отсутствует!|r")
+        return 
+    end
+    
+    if C_BattlePass.RequestQuests then C_BattlePass.RequestQuests() end
+
+    local pName = UnitName("player")
+    local pRealm = GetRealmName()
+    
+    -- ЗАПИСЬ В ОЗУ: Работаем строго внутри локальной RAM-таблицы без нагрузки на жесткий диск
+    if not ramCacheDB[pRealm] then ramCacheDB[pRealm] = {} end
+    if not ramCacheDB[pRealm][pName] then ramCacheDB[pRealm][pName] = {} end
+    
+    local charData = ramCacheDB[pRealm][pName]
+    charData.name = pName
+    local _, classEng = UnitClass("player")
+    if classEng then charData.class = classEng end
+    charData.quests = {}
+
+    local totalQuestsFound = 0
+    
+    for questType = 1, 2 do
+        local success, numQuests = pcall(function() return C_BattlePass.GetNumQuests(questType) end)
+        
+        if not success then
+            print("|cffff0000[SBPT-MEM-DEBUG] КРИТИЧЕСКИЙ СБОЙ: C_BattlePass.GetNumQuests вызвал ошибку ядра Сируса!|r")
+            numQuests = 0
+        end
+        
+        numQuests = numQuests or 0
+        
+        for i = 1, numQuests do
+            local idSuccess, questID = pcall(function() return C_BattlePass.GetQuestID(questType, i) end)
+            
+            if idSuccess and questID then
+                local infoSuccess, qTitle, b, c, d, curProg, maxGoal = pcall(function() 
+                    return C_BattlePass.GetQuestInfoID(questID) 
+                end)
+                
+                if infoSuccess and qTitle and curProg and maxGoal then
+                    totalQuestsFound = totalQuestsFound + 1
+                    local progressText = curProg .. "/" .. maxGoal
+                    
+                    if tonumber(curProg) >= tonumber(maxGoal) or (C_BattlePass.IsQuestCompleteByID and C_BattlePass.IsQuestCompleteByID(questID)) then
+                        progressText = "Завершено"
+                    end
+ -- Сохраняем адресно внутри RAM
+                    charData.quests[questID] = {
+                        id = questID,
+                        type = questType,
+                        text = qTitle,
+                        desc = b or qTitle,
+                        progress = progressText
+                    }
+                end
+            end
+        end
+    end
+    
+    lastScanTime = time()
+
+    if mainGui and mainGui:IsShown() and UpdateGUIText then
+        UpdateGUIText()
+    end
+end
+
+
+function TriggerNinjaScanWithCooldown()
+    if InCombatLockdown() then return end
+    local currentTime = time()
+    -- Живой кулдаун 5 минут для чата
+    if (currentTime - lastScanTime) >= 300 then
+        ExecuteSilentBPScan()
+    end
+end
+
+local memoryFrame = CreateFrame("Frame")
+memoryFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+memoryFrame:RegisterEvent("PLAYER_LOGOUT")
+memoryFrame:RegisterEvent("QUEST_WATCH_UPDATE")
+
+local memoryTimer = 0
+local diskTimer = 0
+local delayEnterScan = false
+local delayLiveScan = false
+local liveScanTimer = 0
+
+memoryFrame:SetScript("OnEvent", function(self, event, ...)
+    if event == "PLAYER_ENTERING_WORLD" then
+        delayEnterScan = true
+        memoryTimer = -3
+    elseif event == "PLAYER_LOGOUT" then
+        if ExecuteSilentBPScan then ExecuteSilentBPScan(true) end
+        if SaveRAMCacheToDisk then SaveRAMCacheToDisk() end
+    elseif event == "QUEST_WATCH_UPDATE" then
+        -- Если наше окно открыто, взводим безопасный флаг задержки на 0.3 секунды
+        if mainGui and mainGui:IsShown() then
+            delayLiveScan = true
+            liveScanTimer = -0.3 -- Ждем ровно 300 миллисекунд
+        end
+    end
+end)
+
+memoryFrame:SetScript("OnUpdate", function(self, elapsed)
+    if delayEnterScan then
+        memoryTimer = memoryTimer + elapsed
+        if memoryTimer >= 0 then
+            delayEnterScan = false
+            if ExecuteSilentBPScan then ExecuteSilentBPScan(true) end
+        end
+    end
+    
+    if delayLiveScan then
+        liveScanTimer = liveScanTimer + elapsed
+        if liveScanTimer >= 0 then
+            delayLiveScan = false
+            if ExecuteSilentBPScan then ExecuteSilentBPScan(true) end
+        end
+    end
+    
+    -- ИСПРАВЛЕНО: Ускоренный таймер сброса ОЗУ на диск раз в 1 минуту (60 секунд) вне боя
+    diskTimer = diskTimer + elapsed
+    if diskTimer >= 60 then
+        diskTimer = 0
+        if not InCombatLockdown() and SaveRAMCacheToDisk then
+            SaveRAMCacheToDisk()
+        end
+    end
+end)
+
+--sbpt-v258: УМНАЯ ЦЕНТРАЛЬНАЯ ФУНКЦИЯ ТОТАЛЬНОЙ МИГРАЦИИ И ОЧИСТКИ ВСЕХ БАЗ ДАННЫХ И ХЛАМА В WTF
+local CURRENT_SBPT_VERSION = 110 -- Целевая версия структуры данных 1.1.0
+
+function ExecuteSBPTDatabaseMigration(forceClear)
+    if not SirusBPTrackerConfig then SirusBPTrackerConfig = { minimapPos = 45 } end
+    if not SirusBPTrackerDB then SirusBPTrackerDB = {} end
+    
+    -- Считываем сохраненную версию из верхней базы на жестком диске
+    local savedVersion = tonumber(SirusBPTrackerDB.Version) or 0
+    
+    -- УНИВЕРСАЛЬНЫЙ ТРИГГЕР: Срабатывает при изменении версии структуры в коде или ручном сбросе (forceClear)
+    if forceClear or savedVersion < CURRENT_SBPT_VERSION then
+        
+        -- Выводим оранжевое уведомление в чат строго в момент автоматического обновления структуры
+        if not forceClear then
+            DEFAULT_CHAT_FRAME:AddMessage("|cffff8040[SirusBP]|r Обнаружено обновление структуры аддона до версии 1.1! Старая база данных и сборы чата автоматически очищены для стабильной работы.")
+        end
+
+        -- 1. ТОТАЛЬНЫЙ СБРОС: Пересоздаем дисковые таблицы как абсолютно чистые пустые структуры
+        SirusBPTrackerDB = {}
+        SirusBPTrackerFilterDB = {}
+        SirusBPTrackerCharFilterDB = {}
+        
+        -- Намертво защищаем фоновый парсер чата от миллисекундного вакуума (nil), создавая буфер сборов мгновенно
+        SirusBPTrackerDB["QUEST_LFG"] = {} 
+        
+        -- 2. СТРОКИ-ЛАСТИКИ: Принудительно зануляем старый дисковый хлам, заставляя WoW API навсегда стереть его из файла!
+        SirusBPTrackerVersionDB = nil
+        SirusBPTrackerConfigDB = nil
+        SirusBPTrackerConfig.Version = nil
+        
+        -- 3. Полностью выжигаем оперативную память (ОЗУ-кэш твинков)
+        if ramCacheDB then
+            for realm in pairs(ramCacheDB) do
+                ramCacheDB[realm] = nil
+            end
+        end
+        ramCacheDB = {}
+        
+        -- 4. Подготавливаем чистый ОЗУ-путь для текущего реалма персонажа
+        local currentRealm = GetRealmName() or "Unknown"
+        SirusBPTrackerDB[currentRealm] = {}
+        ramCacheDB[currentRealm] = {}
+        
+        -- 5. Намертво записываем маркер актуальной целой версии структуры в верхнюю базу
+        SirusBPTrackerDB.Version = CURRENT_SBPT_VERSION
+        
+        -- 6. ПРИНУДИТЕЛЬНЫЙ ДИСКОВЫЙ СЛЕСАРЬ: Мгновенно выгружаем чистую структуру в WTF-файл
+        if SaveRAMCacheToDisk then
+            SaveRAMCacheToDisk()
+        end
+        return true
+    end
+    return false
+end
+
+
+-- ЗАПУСКАЕМ СКАНЕР НА ДВУХ СТАРТОВЫХ СОБЫТИЯХ ДЛЯ ТОЧНОГО КОНТРОЛЯ
+local migrationInitFrame = CreateFrame("Frame")
+migrationInitFrame:RegisterEvent("VARIABLES_LOADED")
+migrationInitFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+migrationInitFrame:SetScript("OnEvent", function(self, event)
+    -- Вызываем бесшумную проверку версии структуры базы данных на каждом этапе загрузки
+    ExecuteSBPTDatabaseMigration(false)
+end)
 
