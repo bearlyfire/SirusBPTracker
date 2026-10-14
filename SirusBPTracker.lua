@@ -39,124 +39,6 @@ local function GetAnyText(obj)
     return nil
 end
 
---[[ страя функция получения данных
--- ИСПРАВЛЕННЫЙ Высокоточное сканирование карточки квеста
-local function GetProgressDirect(questFrameName)
-    local mainFrame = _G[questFrameName]
-    if not mainFrame then return "0/1" end
-    local bestProgress, maxTargetValue, isCompleted = nil, -1, false
-    
-    local function ScanElement(obj)
-        if not obj then return end
-        local txt = GetAnyText(obj)
-        if txt and txt ~= "" then
-            local cleanTxt = string.gsub(txt, "^%s*(.-)%s*$", "%1")
-            
-            -- Сбор цифрового прогресса (0/1, 3/5 и т.д.)
-            if string.match(cleanTxt, "^%d+/%d+$") then
-                local current, target = string.match(cleanTxt, "(%d+)/(%d+)")
-                if current and target then
-                    local targetNum = tonumber(target) or 0
-                    if targetNum > maxTargetValue then maxTargetValue = targetNum; bestProgress = cleanTxt end
-                end
-            end
-            
-            -- Сбор процентного прогресса
-            if string.match(cleanTxt, "^%d+%%$") then
-                local num = tonumber(string.match(cleanTxt, "(%d+)")) or 0
-                if num > maxTargetValue then maxTargetValue = num; bestProgress = cleanTxt end
-            end
-            
-            -- ИСПРАВЛЕНО: Завершено должно быть ОТДЕЛЬНЫМ словом (а не частью слова "Завершите")
-            -- Ищем строго точное совпадение со статусом Сируса
-            if cleanTxt == "Завершено" or cleanTxt == "Выполнено" or cleanTxt == "Завершенено" then
-                isCompleted = true
-            end
-        end
-        
-        if obj.GetRegions then
-            local regions = { obj:GetRegions() }
-            for _, r in ipairs(regions) do
-                local rtxt = GetAnyText(r)
-                if rtxt and rtxt ~= "" then
-                    local cleanRtxt = string.gsub(rtxt, "^%s*(.-)%s*$", "%1")
-                    
-                    if string.match(cleanRtxt, "^%d+/%d+$") then
-                        local current, target = string.match(cleanRtxt, "(%d+)/(%d+)")
-                        if current and target then
-                            local targetNum = tonumber(target) or 0
-                            if targetNum > maxTargetValue then maxTargetValue = targetNum; bestProgress = cleanRtxt end
-                        end
-                    end
-                    
-                    if string.match(cleanRtxt, "^%d+%%$") then
-                        local num = tonumber(string.match(cleanRtxt, "(%d+)")) or 0
-                        if num > maxTargetValue then maxTargetValue = num; bestProgress = cleanRtxt end
-                    end
-                    
-                    -- ИСПРАВЛЕНО И ТУТ: Жесткая проверка на отдельное статусное слово
-                    if cleanRtxt == "Завершено" or cleanTxt == "Выполнено" or cleanTxt == "Завершенено" then
-                        isCompleted = true
-                    end
-                end
-            end
-        end
-        if obj.GetChildren then
-            local children = { obj:GetChildren() }
-            for _, child in ipairs(children) do ScanElement(child) end
-        end
-    end
-    
-    ScanElement(mainFrame)
-    if isCompleted then return "Завершено" end
-    if bestProgress then return bestProgress end
-    return "0/1"
-end
---]]
-
---[[ старая функция получения данных
--- Функция записи данных в БД
-local function DirectScanBattlePass()
-    if not BattlePassFrame or not BattlePassFrame:IsShown() then return false end
-    local charKey = UnitName("player") .. " - " .. GetRealmName()
-    local tempLog = {}
-    local validQuestsFound = 0
-    
-    for h = 1, 2 do
-        local holderName = "BattlePassFrameContentQuestPageScrollFrameScrollChildQuestHolder" .. h
-        local holder = _G[holderName]
-        if holder and holder:IsShown() then
-            local blockType = "Сезонные"
-            if h == 1 then blockType = "Ежедневные" end
-            
-            for q = 1, 30 do
-                local questFrameName = holderName .. "QuestFrame" .. q
-                local questFrame = _G[questFrameName]
-                if questFrame and questFrame:IsShown() then
-                    local descFrame = _G[questFrameName .. "ProgressDescription"]
-                    local questText = descFrame and descFrame:GetText()
-                    if questText and questText ~= "" and string.len(questText) > 5 then
-                        table.insert(tempLog, {
-                            text = questText,
-                            progress = GetProgressDirect(questFrameName),
-                            block = blockType
-                        })
-                        validQuestsFound = validQuestsFound + 1
-                    end
-                end
-            end
-        end
-    end
-    
-    if validQuestsFound > 0 then
-        SirusBPTrackerDB[charKey] = SirusBPTrackerDB[charKey] or {}
-        SirusBPTrackerDB[charKey].class = select(2, UnitClass("player"))
-        SirusBPTrackerDB[charKey].quests = tempLog
-        return true
-    end
-    return false
-end
---]]
 -------------------------------------------------------------------------------
 -- GUI ИНТЕРФЕЙС И ПОИСКОВАЯ СТРОКА
 -------------------------------------------------------------------------------
@@ -371,78 +253,6 @@ CreateMainGUI = function()
 
     gui.sborScrollChild = sborScrollChild
     gui.sborScrollFrame = sborScrollFrame
---[[ бэкап рабочей версии вкладок
---sbpt-v60-tab-colors: КРАСИВЫЙ ЦВЕТ ВКЛАДОК БЕЗ УЖАСНОГО БЕЛОГО ФОНА
-    gui.myTabs = {}
-    local function SwitchTab(id)
-        if not SirusBPTrackerConfig then SirusBPTrackerConfig = {} end
-        SirusBPTrackerConfig.ActiveTab = id
-        
-        if id == 1 then
-            scrollFrame:Show()
-            sborScrollFrame:Hide()
-            searchBox:Show()
-        else
-            scrollFrame:Hide()
-            sborScrollFrame:Show()
-            searchBox:Hide()
-        end
-
-        -- ИСПРАВЛЕНО: Красивые цвета для активной и неактивной вкладок
-        for tID, btn in ipairs(gui.myTabs) do
-            if tID == id then
-                -- АКТИВНАЯ ВКЛАДКА: Стильный темно-синий цвет (R, G, B, Alpha)
-                btn:SetBackdropColor(0.12, 0.22, 0.34, 0.95)
-                btn:SetBackdropBorderColor(0, 0.6, 0.9, 1) -- Голубое неоновое свечение рамки
-                btn.text:SetTextColor(1, 0.82, 0) -- Золотистый яркий текст
-            else
-                -- НЕАКТИВНАЯ ВКЛАДКА: Прозрачно-угольный цвет в тон главного фрейма
-                btn:SetBackdropColor(0.05, 0.05, 0.05, 0.85)
-                btn:SetBackdropBorderColor(0.2, 0.2, 0.2, 1) -- Тусклая серая рамка
-                btn.text:SetTextColor(0.5, 0.5, 0.5) -- Приглушенный серый текст
-            end
-        end
-        if UpdateGUIText then UpdateGUIText() end
-    end
-
-    local tabNames = { "Квесты персонажей", "Актуальные сборы" }
-    for i = 1, 2 do
-        local tab = CreateFrame("Button", nil, gui)
-        tab:SetSize(140, 22)
-        tab:SetBackdrop({
-            bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-            tile = true, tileSize = 10, edgeSize = 10, insets = { left = 2, right = 2, top = 2, bottom = 2 }
-        })
-        
-        if i == 1 then
-            tab:SetPoint("TOPLEFT", gui, "TOPLEFT", 15, -45)
-        else
-            tab:SetPoint("LEFT", gui.myTabs[1], "RIGHT", 5, 0)
-        end
-
-        tab.text = tab:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        tab.text:SetPoint("CENTER", 0, 0)
-        tab.text:SetText(tabNames[i])
-
-        -- ЭФФЕКТ НАВЕДЕНИЯ МЫШИ: Вкладка слегка подсвечивается при наведении курсора
-        tab:SetScript("OnEnter", function(self)
-            if SirusBPTrackerConfig.ActiveTab ~= i then
-                self:SetBackdropColor(0.15, 0.15, 0.15, 0.9)
-                self.text:SetTextColor(0.8, 0.8, 0.8)
-            end
-        end)
-        tab:SetScript("OnLeave", function(self)
-            if SirusBPTrackerConfig.ActiveTab ~= i then
-                self:SetBackdropColor(0.05, 0.05, 0.05, 0.85)
-                self.text:SetTextColor(0.5, 0.5, 0.5)
-            end
-        end)
-
-        tab:SetScript("OnClick", function() SwitchTab(i) end)
-        gui.myTabs[i] = tab
-    end
---sbpt-v60-tab-colors: КОНЕЦ ИСПРАВЛЕНИЯ ЦВЕТОВ ВКЛАДОК
-]]
 
 --sbpt-v293: МОДЕРНИЗАЦИЯ СИСТЕМЫ ВКЛАДОК: ДОБАВЛЕНИЕ ТРЕТЬЕЙ ВКЛАДКИ "АКТИВНОСТИ" И НОВОГО ХОЛСТА
     -- Инициализируем новый глобальный скролл-фрейм для холста активностей, если он еще не создан
@@ -495,6 +305,10 @@ CreateMainGUI = function()
                 btn.text:SetTextColor(0.5, 0.5, 0.5) -- Приглушенный серый текст
             end
         end
+		--sbpt-v589: ТОЧЕЧНЫЙ СБРОС АЛЬФЫ ВСЕХ ВКЛАДОК ПРИ ПЕРЕКЛЮЧЕНИИ
+        for _, btn in ipairs(gui.myTabs) do if btn and btn.SetAlpha then btn:SetAlpha(1) end end
+        if SBPT_ResetMinimapNotification and id == 2 then SBPT_ResetMinimapNotification() end
+
         if UpdateGUIText then UpdateGUIText() end
         if DrawActivitiesTab then DrawActivitiesTab() end -- Будущий вызов отрисовки таблицы активностей
     end
@@ -663,31 +477,6 @@ CreateMainGUI = function()
     mainGui = gui
     return mainGui
 end
-
-
----------------------------------------------------------------------------------------------------------------
---[[ -- бэкап функции шрифтов
---sbpt-v08-ui-fixes: ЧАСТЬ 1 ИЗ 2 ПОЛНОГО БЛОКА ИНТЕРФЕЙСА (ЦВЕТА КЛАССОВ, ГОЛУБЫЕ ПЛАШКИ, ЗОЛОТЫЕ КВЕСТЫ)
-local function AcquireFontString(parent, font, r, g, b, justify, width, indent, yOffset)
-    local fs
-    if #fontStringPool > 0 then
-        fs = table.remove(fontStringPool)
-        fs:SetParent(parent)
-        fs:Show()
-    else
-        fs = parent:CreateFontString(nil, "OVERLAY")
-    end
-    fs:ClearAllPoints()
-    
-    fs:SetFont("Fonts\\FRIZQT__.TTF", (font == "GameFontNormalLarge" and 13 or 11), "OUTLINE")
-    fs:SetPoint("TOPLEFT", indent or 10, yOffset)
-    fs:SetWidth(width or 440)
-    fs:SetJustifyH(justify or "LEFT")
-    if r then fs:SetTextColor(r, g, b) else fs:SetTextColor(1, 1, 1) end
-    table.insert(activeStrings, fs)
-    return fs
-end
---]]
 
 --sbpt-v465: ПОЛНАЯ ИЗОЛЯЦИЯ ШРИФТОВ ОТ ГЛОБАЛЬНОЙ ПАМЯТИ WOW ДЛЯ ЗАЩИТЫ ЧАТА ELVUI
 local function AcquireFontString(parent, font, r, g, b, justify, width, indent, yOffset)
@@ -1392,6 +1181,11 @@ chatTrackerFrame:SetScript("OnEvent", function(self, event, ...)
                         })
                     end
 
+--sbpt-v585: ВЫЗОВ СЧЁТЧИКА С ПЕРЕДАЧЕЙ ID КВЕСТА И ИМЕНИ АВТОРA СБОРА
+                    if SBPT_CheckAndIncrementNotification then 
+                        SBPT_CheckAndIncrementNotification(questID, arg2) 
+                    end
+
                     if mainGui and mainGui:IsShown() and UpdateGUIText then
                         UpdateGUIText()
                     end
@@ -1742,6 +1536,35 @@ end
 local function CreateMinimapButton()
     if SirusBPMinimapButton then return end
     local button = CreateFrame("Button", "SirusBPMinimapButton", Minimap)
+	
+--sbpt-v638: КОМПАКТНЫЙ ЦВЕТНОЙ КРУЖОЧЕК С ЖЁСТКОЙ ЧЁРНОЙ ОБВОДКОЙ ПО КРАЯМ (9х9 и 7х7)
+    if button and not button.NotificationDot then
+        -- Создаем базовый защитный фрейм на высшем уровне (размер под черную обводку)
+        button.DotFrame = CreateFrame("Frame", nil, button)
+        button.DotFrame:SetSize(9, 9) -- Внешний размер обводки
+        button.DotFrame:SetPoint("BOTTOMRIGHT", button, "BOTTOMRIGHT", -4, 4) -- Смещение ближе к центру лапы
+        button.DotFrame:SetFrameLevel(button:GetFrameLevel() + 10) 
+
+        -- СЛОЙ 1: ЧЁРНЫЙ КРУГ-ОБВОДКА (Лежит на самом дне подложки)
+        local dotBorder = button.DotFrame:CreateTexture(nil, "BACKGROUND")
+        dotBorder:SetTexture("Interface\\CHARACTERFRAME\\TempPortraitAlphaMask")
+        dotBorder:SetAllPoints(button.DotFrame) -- Растягиваем на все 9x9 пикселей
+        dotBorder:SetVertexColor(0, 0, 0, 1) -- Чистый глухой черный цвет контура
+
+        -- СЛОЙ 2: ВНУТРЕННИЙ УМЕНЬШЕННЫЙ ЦВЕТНОЙ КРУЖОЧЕК КЛАССА
+        button.NotificationDot = button.DotFrame:CreateTexture(nil, "OVERLAY")
+        button.NotificationDot:SetTexture("Interface\\CHARACTERFRAME\\TempPortraitAlphaMask")
+        -- Делаем его аккуратным и изящным (7x7 пикселей)
+        button.NotificationDot:SetSize(7, 7) 
+        -- Центрируем его ровно посередине черного круга, чтобы обводка была равномерной со всех сторон
+        button.NotificationDot:SetPoint("CENTER", button.DotFrame, "CENTER", 0, 0)
+        
+        button.NotificationDot:SetVertexColor(1, 1, 1, 1) -- Цвет на лету покрасит скрипт
+        
+        button.DotFrame:Hide() -- Изначально скрываем всю конструкцию
+    end
+
+	
     button:SetSize(31, 31) button:SetFrameLevel(Minimap:GetFrameLevel() + 2) button:SetToplevel(true)
     button:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
 
@@ -1793,104 +1616,6 @@ end
 
 --sbpt-v242: ДВУХРУБЕЖНЫЙ АВТОЗАПУСК МИГРАЦИИ 1.1: СРАБАТЫВАЕТ И ПРИ ЗАГРУЗКЕ АДДОНА, И ПРИ КАЖДОМ РЕЛОАДЕ (/RELOAD)
 frame:RegisterEvent("PLAYER_ENTERING_WORLD") -- Дополнительно регистрируем триггер релоада
-
-
---[[ бэкап обрабочика событий
---sbpt-v298: ИСПРАВЛЕННЫЙ ОБРАБОТЧИК СОБЫТИЙ С ПОДДЕРЖКОЙ КЭША АКТИВНОСТЕЙ И ЖИВЫМ ТРИГГЕРОМ СДАЧИ КВЕСТОВ
-frame:SetScript("OnEvent", function(self, event, arg1, ...)
-    -- РУБЕЖ 1: Срабатывает один раз при первоначальной загрузке SavedVariables с диска
-    if event == "ADDON_LOADED" and arg1 == "SirusBPTracker" then
-        if not SirusBPTrackerDB then SirusBPTrackerDB = {} end
-        if not SirusBPTrackerVersionDB then SirusBPTrackerVersionDB = {} end
-        if not SirusBPTrackerFilterDB then SirusBPTrackerFilterDB = {} end
-        if not SirusBPTrackerCharFilterDB then SirusBPTrackerCharFilterDB = {} end
-        if not SirusBPTrackerConfig then SirusBPTrackerConfig = { minimapPos = 45 } end
-        
-        -- Вызываем бесшумную проверку версии структуры ДО наполнения ОЗУ-кэша
-        if ExecuteSBPTDatabaseMigration then
-            ExecuteSBPTDatabaseMigration(false)
-        end
-        
-        -- Копируем чистые данные из файла WTF в ОЗУ-кэш при загрузке аддона
-        if SirusBPTrackerDB then
-            for k, v in pairs(SirusBPTrackerDB) do
-                if type(v) == "table" then
-                    ramCacheDB[k] = {}
-                    for charName, charData in pairs(v) do
-                        if type(charData) == "table" then
-                            ramCacheDB[k][charName] = {
-                                name = charData.name,
-                                class = charData.class,
-                                quests = {},
-                                activities = {} -- ИСПРАВЛЕНО: Создаем пустой ОЗУ-путь для активностей твинка
-                            }
-                            -- ГЛУБОКОЕ КОПИРОВАНИЕ АКТИВНОСТЕЙ: Переносим сохраненные КД (Монеты/Охоту) с диска в ОЗУ
-                            if charData.activities then
-                                for actKey, actData in pairs(charData.activities) do
-                                    ramCacheDB[k][charName].activities[actKey] = {
-                                        status = actData.status,
-                                        lastCheck = actData.lastCheck
-                                    }
-                                end
-                            end
-                            if charData.quests then
-                                for qID, qData in pairs(charData.quests) do
-                                    ramCacheDB[k][charName].quests[qID] = {
-                                        id = qData.id,
-                                        type = qData.type,
-                                        text = qData.text,
-                                        desc = qData.desc,
-                                        progress = qData.progress
-                                    }
-                                end
-                            end
-                        end
-                    end
-                else
-                    ramCacheDB[k] = v
-                end
-            end
-        end
-		
-        CreateMinimapButton()
-        
-    -- РУБЕЖ 2 (СТРАХОВОЧНЫЙ): Автоматически срабатывает при КАЖДОМ релоаде (/reload) и входе в мир
-    elseif event == "PLAYER_ENTERING_WORLD" then
-        -- 1. Контрольная бесшумная проверка версии структуры после загрузки мира
-        if ExecuteSBPTDatabaseMigration then
-            ExecuteSBPTDatabaseMigration(false)
-        end
-        
-        -- 2. Принудительно запускаем тихий скан БП, чтобы мгновенно наполнить пустую базу квестами текущего чара
-        if ExecuteSilentBPScan then
-            ExecuteSilentBPScan(true)
-        end
-        
-        -- 3. Принудительно заставляем графический движок обновить текст на вкладках
-        if UpdateGUIText then
-            UpdateGUIText()
-        end
-        
-        -- 4. Вызываем наш центральный изолированный сканер активностей
-        if UpdateCurrentCharacterActivities then
-            UpdateCurrentCharacterActivities()
-        end		
-
-    -- РУБЕЖ 3 (ЖИВОЙ): Мгновенно перехватывает момент нажатия кнопки "Завершить" у НИП
-    elseif event == "QUEST_TURNED_IN" then
-        -- Срочно обновляем базу данных активностей в памяти
-        if UpdateCurrentCharacterActivities then 
-            UpdateCurrentCharacterActivities() 
-        end
-        -- Если игрок прямо сейчас сидит на Вкладке 3, мгновенно перерисовываем иконки на живые
-        if DrawActivitiesTab and activitiesScrollFrame and activitiesScrollFrame:IsShown() then
-            DrawActivitiesTab()
-        end
-    end
-	
-end)
-
--]] --конец бэкапа обрабочика событий
 
 -- новый обрабочик событий
 
@@ -2008,22 +1733,6 @@ frame:SetScript("OnEvent", function(self, event, arg1, ...)
     end
 end)
 
-
---sbpt-v197: ОТКЛЮЧЕНИЕ СТАРОГО ГРАФИЧЕСКОГО ТАЙМЕРА ОБНОВЛЕНИЯ СКРАПЕРА ОКНА СИРУСА
---[[
-local tickerFrame = CreateFrame("Frame")
-tickerFrame:SetScript("OnUpdate", function(self, elapsed)
-    self.timer = (self.timer or 0) + elapsed
-    if self.timer > 0.4 then
-        self.timer = 0
-        if BattlePassFrame and BattlePassFrame:IsShown() then 
-            local updated = DirectScanBattlePass()
-            if updated and mainGui and mainGui:IsShown() then UpdateGUIText() end
-        end
-    end
-end)
-]]
--- Конец комментирования старого таймера
 
 SLASH_SIRUSBPVIEW1 = "/bp"
 SlashCmdList["SIRUSBPVIEW"] = function()
@@ -2501,140 +2210,6 @@ end)
 
 --============== блок v1.1 конец
 
---[[ бэкап задвоения
---sbpt-v309: МОНОЛИТ ТОТАЛЬНОЙ ДИАГНОСТИКИ С ЗАЩИТОЙ ОТ NIL-ПАДЕНИЙ И БРОНЕБОЙНЫМ ЛОГИРОВАНИЕМ
-local currentRealm = GetRealmName() or "Unknown"
-
-function UpdateCurrentCharacterActivities(turnedInQuestID)
-    local charName = UnitName("player") or "Unknown"
-    if charName == "Unknown" then 
-        DEFAULT_CHAT_FRAME:AddMessage("|cffff2020[SirusBP-Лог]|r Критическая ошибка: Имя персонажа не определено!")
-        return 
-    end
-    
-    -- 1. ПОШАГОВАЯ ИЗОЛИРОВАННАЯ ИНИЦИАЛИЗАЦИЯ (Исключаем любые nil-ошибки индексации)
-    if not ramCacheDB then ramCacheDB = {} end
-    if not ramCacheDB[currentRealm] then ramCacheDB[currentRealm] = {} end
-    if not ramCacheDB[currentRealm][charName] then ramCacheDB[currentRealm][charName] = {} end
-    if not ramCacheDB[currentRealm][charName].activities then ramCacheDB[currentRealm][charName].activities = {} end
-    
-    if not SirusBPTrackerDB then SirusBPTrackerDB = {} end
-    if not SirusBPTrackerDB[currentRealm] then SirusBPTrackerDB[currentRealm] = {} end
-    if not SirusBPTrackerDB[currentRealm][charName] then SirusBPTrackerDB[currentRealm][charName] = {} end
-    if not SirusBPTrackerDB[currentRealm][charName].activities then SirusBPTrackerDB[currentRealm][charName].activities = {} end
-     
-    -- Вытаскиваем массив сданных квестов Сируса
-    local completedQuests = {}
-    local getQuestsSuccess, getQuestsErr = pcall(function() GetQuestsCompleted(completedQuests) end)
-    if not getQuestsSuccess then
-        DEFAULT_CHAT_FRAME:AddMessage("|cffff2020[SirusBP-Лог]|r Сбой нативной функции GetQuestsCompleted: " .. tostring(getQuestsErr))
-    end
-    
-    local activityTargets = {
-        ["KELDANAS_COIN"] = 11548, 
-        ["WEEKLY_HUNT"]  = 1015000, 
-        ["NORIGORN"]     = 22372,   
-    }
-    
-    local currentTimeStamp = time()
-    
-    for key, qID in pairs(activityTargets) do
-        local currentStatus = 0
-        local reason = "Не найден ни в сданных, ни в журнале (Сброшен/Отменен)"
-        
-        -- Проверка А: Пойман ли живой перехват нажатия кнопки "Завершить"
-        if turnedInQuestID and tonumber(turnedInQuestID) == qID then
-            currentStatus = 1
-            reason = "Мгновенный живой перехват события QUEST_TURNED_IN!"
-            
-        -- Проверка Б: Нативный серверный флаг Сируса
-        elseif IsQuestFlaggedCompleted and IsQuestFlaggedCompleted(qID) then
-            currentStatus = 1
-            reason = "Сервер Сируса вернул TRUE через IsQuestFlaggedCompleted"
-            
-        -- Проверка В: Массив сданных квестов (Проверяем числовой и строковый типы)
-        elseif completedQuests and (completedQuests[qID] or completedQuests[tostring(qID)]) then
-            currentStatus = 1
-            reason = "Квест обнаружен в кэш-таблице GetQuestsCompleted"
-            
-        else
-            -- Проверка Г: Сканируем живой журнал заданий персонажа
-            local numEntries = GetNumQuestLogEntries() or 0
-            for i = 1, numEntries do
-                local title, _, _, _, _, _, _, questID = GetQuestLogTitle(i)
-                local logLink = GetQuestLink(i)
-                
-                -- Бронебойный перекрестный поиск ID квеста в журнале WotLK
-                if (questID and questID == qID) or (logLink and string.find(logLink, tostring(qID))) then
-                    currentStatus = 2
-                    reason = string.format("Задание висит в журнале под именем '%s' (Статус: В процессе)", tostring(title or key))
-                    break
-                end
-            end
-        end
-             
-        -- Безопасная точечная фиксация в ОЗУ
-        ramCacheDB[currentRealm][charName].activities[key].status = currentStatus
-        ramCacheDB[currentRealm][charName].activities[key].lastCheck = currentTimeStamp
-        
-        -- Безопасная точечная фиксация на жесткий диск WTF
-        SirusBPTrackerDB[currentRealm][charName].activities[key].status = currentStatus
-        SirusBPTrackerDB[currentRealm][charName].activities[key].lastCheck = currentTimeStamp
-    end
-end
-
-
-function GetSmartActivityStatus(realm, char, activityKey)
-    -- Жестко проверяем существование веток, чтобы вместо ошибок выводить прочерки
-    if not ramCacheDB or not ramCacheDB[realm] or not ramCacheDB[realm][char] then return -1 end
-    if not ramCacheDB[realm][char].activities or not ramCacheDB[realm][char].activities[activityKey] then return -1 end
-    
-    local data = ramCacheDB[realm][char].activities[activityKey]
-    local savedStatus = data.status or 0
-    local lastCheck = data.lastCheck or 0
-    
-    if savedStatus == 0 then return 0 end
-    local currentTime = time()
-    
-    if activityKey == "KELDANAS_COIN" then
-        local dateTable = date("*t", currentTime)
-        dateTable.hour = 3; dateTable.min = 0; dateTable.sec = 0
-        local serverResetTime = time(dateTable)
-        if currentTime < serverResetTime then serverResetTime = serverResetTime - 86400 end
-        if lastCheck < serverResetTime then return 0 end
-    else
-        local dateTable = date("*t", currentTime)
-        local daysSinceThursday = dateTable.wday - 5
-        if daysSinceThursday < 0 then daysSinceThursday = daysSinceThursday + 7 end
-        dateTable.hour = 3; dateTable.min = 0; dateTable.sec = 0
-        local thursdayResetTime = time(dateTable) - (daysSinceThursday * 86400)
-        
-        if dateTable.wday == 5 and currentTime < thursdayResetTime then
-            thursdayResetTime = thursdayResetTime - (7 * 86400)
-        end
-        if lastCheck < thursdayResetTime then return 0 end
-    end
-    
-    return savedStatus
-end
-
-if not sbptActivityTimerFrame then
-    sbptActivityTimerFrame = CreateFrame("Frame")
-end
-local timeSinceLastUpdate = 0
-sbptActivityTimerFrame:SetScript("OnUpdate", function(self, elapsed)
-    timeSinceLastUpdate = timeSinceLastUpdate + elapsed
-    if timeSinceLastUpdate >= 60 then
-        timeSinceLastUpdate = 0
-        if UpdateCurrentCharacterActivities then UpdateCurrentCharacterActivities() end
-        if DrawActivitiesTab and activitiesScrollFrame and activitiesScrollFrame:IsShown() then
-            DrawActivitiesTab()
-        end
-    end
-end)
---]] --бэкап задвоения
-
-
 --sbpt-v291: ЧАТ-СКАНЕР /СБПТСКАН ДЛЯ МГНОВЕННОГО ИЗВЛЕЧЕНИЯ СКРЫТЫХ ID ИЗ ССЫЛОК ЧАТА
 SLASH_SBPTFINDER1 = "/сбптскан"
 SLASH_SBPTFINDER2 = "/sbptscan"
@@ -2656,284 +2231,6 @@ SlashCmdList["SBPTFINDER"] = function(msg)
     
     DEFAULT_CHAT_FRAME:AddMessage("|cffff2020[Внимание]|r Ссылка квеста не найдена. Инструкция: Откройте чат, зажмите Shift и кликните по квесту в журнале, чтобы ссылка появилась в строке ввода, затем введите /сбптскан и нажмите Enter!")
 end
-
---[[ Бэкап отрисовки 3 вкладки
---sbpt-v295: ОБНОВЛЕННЫЙ ГРАФИЧЕСКИЙ ДВИЖОК ВКЛАДКИ С ТЕКСТОВОЙ ШАПКОЙ И НОВЫМ ПОРЯДКОМ КОЛОНОК
-local activityRowsPool = {} -- Пул для хранения графических строк твинков
-local activitiesHeaderFrame = nil -- Фрейм текстовой шапки таблицы
-
-function DrawActivitiesTab()
-    if not activitiesScrollFrame or not activitiesScrollFrame:IsShown() then return end
-    local child = activitiesScrollFrame.child
-    if not child then return end
-    
-    -- 1. ТОТАЛЬНАЯ ОЧИСТКА: Удаляем старые строки, чтобы избежать наслоения при перерисовках
-    for _, row in ipairs(activityRowsPool) do
-        row:Hide()
-        row:SetParent(nil)
-    end
-    activityRowsPool = {}
-    
-    -- Удаляем старую шапку, если она была создана ранее, для корректного обновления координат
-    if activitiesHeaderFrame then
-        activitiesHeaderFrame:Hide()
-        activitiesHeaderFrame:SetParent(nil)
-        activitiesHeaderFrame = nil
-    end
-    
-    local currentRealm = GetRealmName() or "Unknown"
-    
-    -- СБОР И СОРТИРОВКА ПЕРСОНАЖЕЙ ТЕКУЩЕГО РЕАЛМА
-    local sortedChars = {}
-    if ramCacheDB and ramCacheDB[currentRealm] then
-        for charName, charData in pairs(ramCacheDB[currentRealm]) do
-            if type(charData) == "table" and charName ~= "QUEST_LFG" and charName ~= "Version" then
-                table.insert(sortedChars, {
-                    name = charName,
-                    class = charData.class or "UNKNOWN"
-                })
-            end
-        end
-    end
-    table.sort(sortedChars, function(a, b) return a.name < b.name end)
-    
-    -- 2. ИЗМЕНЕН ПОРЯДОК КОЛОНОК: Монета -> Охота -> Норигорн
-    local activityConfig = {
-        { key = "KELDANAS_COIN", texture = "Interface\\Icons\\INV_Misc_Coin_01",         name = "Монеты Анахорета (Кель'Данас)", desc = "Ежедневное пожертвование золота. Обновление каждые сутки в 03:00 МСК." },
-        { key = "WEEKLY_HUNT",  texture = "Interface\\Icons\\INV_Weapon_Bow_05",         name = "Охота на великих чудовищ",  desc = "Еженедельное задание Лили в Даларане. Обновление в четверг в 03:00 МСК." },
-        { key = "NORIGORN",     texture = "Interface\\Icons\\INV_Misc_MonsterHead_01",    name = "Норигорн (Обуздать твердыню)", desc = "Еженедельное задание на Тол'Гароде. Обновление в четверг в 03:00 МСК." },
-    }
-    
-    -- ХАРДКОДНЫЕ КООРДИНАТЫ ДЛЯ ИДЕАЛЬНОГО ВЫРАВНИВАНИЯ ШАПКИ И ИКОНОК ПО ВЕРТИКАЛИ
-    local startXOffset = 220
-    local stepXOffset = 65 -- Увеличили шаг до 65 пикселей, чтобы текст шапки не слипался
-    
-    -- 3. СОЗДАНИЕ СТАТИЧЕСКОЙ ТЕКСТОВОЙ ШАПКИ ТАБЛИЦЫ
-    activitiesHeaderFrame = CreateFrame("Frame", nil, child)
-    activitiesHeaderFrame:SetSize(child:GetWidth() - 10, 20)
-    activitiesHeaderFrame:SetPoint("TOPLEFT", child, "TOPLEFT", 5, -5)
-    
-	-- тестовя кнопка
-	--sbpt-v308: ВРЕМЕННАЯ КНОПКА РУЧНОГО ВЫЗОВА ОБНОВЛЕНИЯ ДАННЫХ И ПЕРЕРИСОВКИ ХОЛСТА
-    local refreshActBtn = CreateFrame("Button", "SirusBPRefreshActivitiesBtn", activitiesHeaderFrame, "UIPanelButtonTemplate")
-    refreshActBtn:SetSize(110, 20)
-    -- Сажаем кнопку аккуратно в правый верхний угол холста Вкладки 3
-    refreshActBtn:SetPoint("TOPRIGHT", activitiesHeaderFrame, "TOPRIGHT", -20, 0)
-    refreshActBtn:SetText("Обновить данные")
-    refreshActBtn:SetScript("OnClick", function()
-        DEFAULT_CHAT_FRAME:AddMessage("|cffff8040[SirusBP-Лог]|r Нажата ручная кнопка 'Обновить данные'. Запуск сканирования...")
-        if UpdateCurrentCharacterActivities then 
-            UpdateCurrentCharacterActivities() 
-        end
-        if DrawActivitiesTab then 
-            DrawActivitiesTab() 
-        end
-    end)
-
-	
-    -- Заголовок первой колонки персонажей
-    local hTitle = activitiesHeaderFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    hTitle:SetPoint("LEFT", activitiesHeaderFrame, "LEFT", 10, 0)
-    hTitle:SetText("Персонажи")
-    hTitle:SetTextColor(1, 0.82, 0) -- Красивый золотой цвет
-    
-    -- Отрисовка текстовых подписей над колонками активностей по сетке координат
-    local headerTextMap = { "Монета", "Охота", "Норигорн" }
-    local xHeaderOffset = startXOffset
-    for i, label in ipairs(headerTextMap) do
-        local hLabel = activitiesHeaderFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        -- Выравниваем текст строго по центру будущей пиктограммы
-        hLabel:SetPoint("CENTER", activitiesHeaderFrame, "LEFT", xHeaderOffset + 10, 0)
-        hLabel:SetText(label)
-        hLabel:SetTextColor(0.7, 0.7, 0.7) -- Приглушенный серый цвет шапки
-        xHeaderOffset = xHeaderOffset + stepXOffset
-    end
-    
-    -- 4. ЦИКЛ ОТРИСОВКИ СТРОК ТВИНКОВ (Смещаем старт вниз на -30 пикселей из-за шапки)
-    local yOffset = -32
-    local rowHeight = 26
-    
-    for idx, charInfo in ipairs(sortedChars) do
-        local row = CreateFrame("Frame", nil, child)
-        row:SetSize(child:GetWidth() - 10, rowHeight)
-        row:SetPoint("TOPLEFT", child, "TOPLEFT", 5, yOffset)
-        
-        -- Никнейм персонажа
-        local nameText = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        nameText:SetPoint("LEFT", row, "LEFT", 10, 0)
-        nameText:SetText(charInfo.name)
-        
-        -- Раскраска ника в цвет класса персонажа
-        local classColor = RAID_CLASS_COLORS[charInfo.class]
-        if classColor then
-            nameText:SetTextColor(classColor.r, classColor.g, classColor.b)
-        else
-            nameText:SetTextColor(1, 1, 1)
-        end
-        
-        -- 5. ВЫВОД ДИНАМИЧЕСКИХ ПИКТОГРАММ СТРОГО ПО КООРДИНАТАМ ШАПКИ
-        local xOffset = startXOffset
-        
-        for _, act in ipairs(activityConfig) do
-            local actBtn = CreateFrame("Button", nil, row)
-            actBtn:SetSize(20, 20)
-            actBtn:SetPoint("LEFT", row, "LEFT", xOffset, 0)
-            
-            local tex = actBtn:CreateTexture(nil, "BACKGROUND")
-            tex:SetAllPoints(actBtn)
-            tex:SetTexture(act.texture)
-            actBtn.texture = tex
-            
-            -- Вызов кросс-валидации серверного времени сброса (03:00 ночи МСК)
-                       -- ВЫЗЫВАЕМ НАШУ УМНУЮ ПРОВЕРКУ ВРЕМЕНИ ДЛЯ НЕАКТИВНЫХ ТВИНКОВ
-            local currentStatus = -1 -- -1 означает "Данных нет совсем"
-            if ramCacheDB and ramCacheDB[currentRealm] and ramCacheDB[currentRealm][charInfo.name] then
-                local charData = ramCacheDB[currentRealm][charInfo.name]
-                if charData.activities and charData.activities[act.key] then
-                    if GetSmartActivityStatus then
-                        currentStatus = GetSmartActivityStatus(currentRealm, charInfo.name, act.key)
-                    end
-                end
-            end
-            
-            -- СОЗДАЕМ ТЕКСТОВЫЙ ПРОЧЕРК НА СЛУЧАЙ ОТСУТСТВИЯ ДАННЫХ
-            local dashText = actBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-            dashText:SetPoint("CENTER", actBtn, "CENTER", 0, 0)
-            dashText:SetTextColor(0.4, 0.4, 0.4) -- Серый приглушенный цвет
-            dashText:SetText("—")
-            dashText:Hide()
-
-            -- 5. ВИЗУАЛЬНАЯ МАТРИЦА СОСТОЯНИЙ (ПРОЧЕРК / СЕРЫЙ / ЦВЕТНОЙ)
-            if currentStatus == -1 then
-                -- ДАННЫХ НЕТ СОВСЕМ: Скрываем круглую иконку и показываем аккуратный серый прочерк!
-                tex:Hide()
-                dashText:Show()
-            elseif currentStatus == 1 then
-                -- КВЕСТ ВЫПОЛНЕН И СДАН: Яркая цветная иконка + зеленый неоновый ободок триумфа
-                tex:Show()
-                tex:SetDesaturated(false)
-                actBtn:SetAlpha(1.0)
-                tex:SetVertexColor(1, 1, 1)
-                local border = actBtn:CreateTexture(nil, "OVERLAY")
-                border:SetAllPoints(actBtn)
-                border:SetTexture("Interface\\Buttons\\CheckButtonHilight")
-                border:SetBlendMode("ADD")
-            elseif currentStatus == 2 then
-                -- КВЕСТ В ПРОЦЕССЕ (ВЗЯТ): Цветная иконка с оранжевым предупреждающим тоном
-                tex:Show()
-                tex:SetDesaturated(false)
-                actBtn:SetAlpha(0.9)
-                tex:SetVertexColor(1, 0.85, 0.4)
-            else
-                -- КВЕСТ ДОСТУПЕН (НЕ СДЕЛАН / СБРОШЕН В 03:00): Матовая серая полупрозрачная иконка
-                tex:Show()
-                tex:SetDesaturated(true)
-                actBtn:SetAlpha(0.35)
-                tex:SetVertexColor(1, 1, 1)
-            end
-
-            
-            -- Интерактивные всплывающие подсказки
-            actBtn:SetScript("OnEnter", function(self)
-                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-                GameTooltip:ClearLines()
-                GameTooltip:AddLine(act.name, 1, 0.82, 0)
-                GameTooltip:AddLine(act.desc, 0.8, 0.8, 0.8, true)
-                GameTooltip:AddLine(" ")
-                
-                if currentStatus == 1 then
-                    GameTooltip:AddLine("Статус: Выполнено и сдано сегодня", 0, 1, 0)
-                elseif currentStatus == 2 then
-                    GameTooltip:AddLine("Статус: Задание взято (В журнале)", 1, 0.7, 0)
-                else
-                    GameTooltip:AddLine("Статус: Доступно / Еще не сделано", 0.7, 0.7, 0.7)
-                end
-                GameTooltip:Show()
-            end)
-            actBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
-            
-            xOffset = xOffset + stepXOffset -- Перемещаем следующую иконку на шаг сетки
-        end
-        
-        row:Show()
-        table.insert(activityRowsPool, row)
-        yOffset = yOffset - rowHeight
-    end
-    
-    child:SetHeight(math.max(math.abs(yOffset), 1))
-end
---]]
-
---[[
--- бэкап диагностического блока, нужен только для отладки
---sbpt-v346: АСИНХРОННЫЙ ЛАБОРАТОРНЫЙ ЗОНД-ИСКАТЕЛЬ СКРЫТЫХ ID КВЕСТОВ СИРУСА С ИНТЕРФЕЙСОМ ССЫЛОК
-local sbptDiagnosticProbe = CreateFrame("Frame")
-
--- Регистрируем полный спектр событий, включая серверный затвор готовности КД
-sbptDiagnosticProbe:RegisterEvent("QUEST_LOG_UPDATE")
-sbptDiagnosticProbe:RegisterEvent("QUEST_ACCEPTED")
-sbptDiagnosticProbe:RegisterEvent("QUEST_TURNED_IN")
-sbptDiagnosticProbe:RegisterEvent("UNIT_QUEST_LOG_CHANGED")
-sbptDiagnosticProbe:RegisterEvent("QUEST_QUERY_COMPLETE")
-
-local isProbeDelayActive = false -- Защита от дублирования сканирования
-
-sbptDiagnosticProbe:SetScript("OnEvent", function(self, event, arg1, arg2, ...)
-    local currentTime = date("%H:%M:%S")
-    
-    -- Громко пишем в чат о любом прилетевшем системном сигнале
-    DEFAULT_CHAT_FRAME:AddMessage(string.format("|cff00ffff[Зонд-Событие %s]|r -> Поймано событие: |cffffffff%s|r", currentTime, event))
-    
-    if event == "QUEST_ACCEPTED" then
-        DEFAULT_CHAT_FRAME:AddMessage(string.format("  |cff00ff00• МГНОВЕННЫЙ СИГНАЛ ВЗЯТИЯ:|r Индекс строки: %s, Нативный ID из аргумента: %s", tostring(arg1), tostring(arg2 or "nil")))
-    elseif event == "QUEST_QUERY_COMPLETE" then
-        DEFAULT_CHAT_FRAME:AddMessage("  |cff00ff00• СЕРВЕРНЫЙ ЗАТВОР:|r Пакет КД от Сируса успешно приземлился в ОЗУ вашего компьютера!")
-    end
-
-    -- АСИНХРОННЫЙ ХИРУРГИЧЕСКИЙ ХВАТ: Запускаем отложенный высокоточный скан гиперссылок журнала
-    if not isProbeDelayActive then
-        isProbeDelayActive = true
-        
-        local delayProbeFrame = CreateFrame("Frame")
-        local elapsed = 0
-        delayProbeFrame:SetScript("OnUpdate", function(pSelf, elap)
-            elapsed = elapsed + elap
-            if elapsed >= 0.5 then -- Ждем 0.5 сек, давая Сирусу время полностью сформировать линки в ОЗУ
-                pSelf:SetScript("OnUpdate", nil)
-                isProbeDelayActive = false
-                
-                -- Бежим по всему журналу и вытаскиваем ID из скрытых близзардовских ссылок по тексту!
-                local numQuests = GetNumQuestLogEntries() or 0
-                for i = 1, numQuests do
-                    local title, _, _, _, _, _, _, logQuestID = GetQuestLogTitle(i)
-                    local logLink = GetQuestLink(i)
-                    
-                    if title and (string.find(title, "Обуздать твердыню") or string.find(title, "Норигорн")) then
-                        -- Вытаскиваем побайтовый ID из каноничной строки "quest:ID" внутри ссылки чата
-                        local trueID = logLink and string.match(logLink, "quest:(%d+)") or tostring(logQuestID or "Не найден")
-                        
-                        DEFAULT_CHAT_FRAME:AddMessage(string.format("|cffffaa00[Зонд-АНАЛИЗ %s]|r Найдено задание: |cffffffff'%s'|r", date("%H:%M:%S"), title))
-                        DEFAULT_CHAT_FRAME:AddMessage(string.format("  > Истинный ID из гиперссылки GetQuestLink -> |cff00ff00%s|r", tostring(trueID)))
-                    end
-                end
-                
-                -- Вызываем стандартное обновление аддона
-                local success, err = pcall(function()
-                    if UpdateCurrentCharacterActivities then UpdateCurrentCharacterActivities() end
-                    if DrawActivitiesTab and activitiesScrollFrame and activitiesScrollFrame:IsShown() then
-                        DrawActivitiesTab()
-                    end
-                end)
-                if not success then
-                    DEFAULT_CHAT_FRAME:AddMessage("|cffff2020[Зонд-Ошибка]|r Сбой графики: " .. tostring(err))
-                end
-            end
-        end)
-    end
-end)
--- конец блока зонда
---]]
-
 --
 --sbpt-v348 [ЧАСТЬ 1]: РАСЧЕТ ТАЙМЕРОВ КД И СТАЛЬНАЯ ДВУХЭТАЖНАЯ ШАПКА ТАБЛИЦЫ АКТИВНОСТЕЙ
 local activityRowsPool = {}
@@ -3336,113 +2633,189 @@ sbptActivityTimerFrame:SetScript("OnUpdate", function(self, elapsed)
     end
 end)
 
---[[ кусочек для работы с id квестов
---sbpt-v346: АСИНХРОННЫЙ ЛАБОРАТОРНЫЙ ЗОНД-ИСКАТЕЛЬ СКРЫТЫХ ID КВЕСТОВ СИРУСА С ИНТЕРФЕЙСОМ ССЫЛОК
-local sbptDiagnosticProbe = CreateFrame("Frame")
-sbptDiagnosticProbe:RegisterEvent("QUEST_LOG_UPDATE")
-sbptDiagnosticProbe:RegisterEvent("QUEST_ACCEPTED")
-sbptDiagnosticProbe:RegisterEvent("QUEST_TURNED_IN")
-sbptDiagnosticProbe:RegisterEvent("UNIT_QUEST_LOG_CHANGED")
-sbptDiagnosticProbe:RegisterEvent("QUEST_QUERY_COMPLETE")
+--- ===========================
+--sbpt-v637: ДИСКРЕТНЫЙ МОДУЛЬ СВЕТОФОРА ЦВЕТОВ КЛАССОВ (БЕЗ ЗАТУХАНИЯ) И НЕОНОВОГО ДЫХАНИЯ ВКЛАДКИ
+local SBPT_ActiveNotifications = {} -- Живые связки ["ID_Лидер_Твинк"] = { time, charName, class }
+local SBPT_DisplayRotationList = {} -- Локальный упорядоченный список классов для карусели
+local currentRotationIndex = 1
 
-local isProbeDelayActive = false
+local pulseFrame = CreateFrame("Frame")
+pulseFrame:Hide() 
 
-sbptDiagnosticProbe:SetScript("OnEvent", function(self, event, arg1, arg2, ...)
-    local currentTime = date("%H:%M:%S")
-    DEFAULT_CHAT_FRAME:AddMessage(string.format("|cff00ffff[Зонд-Событие %s]|r -> Поймано событие: |cffffffff%s|r", currentTime, event))
-    
-    if event == "QUEST_ACCEPTED" then
-        DEFAULT_CHAT_FRAME:AddMessage(string.format("  |cff00ff00• МГНОВЕННЫЙ СИГНАЛ ВЗЯТИЯ:|r Индекс строки: %s, Нативный ID из аргумента: %s", tostring(arg1), tostring(arg2 or "nil")))
-    elseif event == "QUEST_QUERY_COMPLETE" then
-        DEFAULT_CHAT_FRAME:AddMessage("  |cff00ff00• СЕРВЕРНЫЙ ЗАТВОР:|r Пакет КД от Сируса успешно приземлился в ОЗУ вашего компьютера!")
+local colorTimer = 0 -- Жесткий секундный таймер для смены цветов классов
+local tabAlpha = 1
+local tabDirection = -1
+
+-- Функция мгновенного, дискретного переключения цвета класса без градиентной каши
+local function UpdateNextClassColorDiscrete()
+    if #SBPT_DisplayRotationList == 0 then
+        if SirusBPMinimapButton and SirusBPMinimapButton.DotFrame then SirusBPMinimapButton.DotFrame:Hide() end
+        pulseFrame:Hide()
+        return
     end
 
-    if not isProbeDelayActive then
-        isProbeDelayActive = true
-        local delayProbeFrame = CreateFrame("Frame")
-        local elapsed = 0
-        delayProbeFrame:SetScript("OnUpdate", function(pSelf, elap)
-            elapsed = elapsed + elap
-            if elapsed >= 0.5 then
-                pSelf:SetScript("OnUpdate", nil)
-                isProbeDelayActive = false
-                
-                local numQuests = GetNumQuestLogEntries() or 0
-                for i = 1, numQuests do
-                    local title, _, _, _, _, _, _, logQuestID = GetQuestLogTitle(i)
-                    local logLink = GetQuestLink(i)
-                    
-                    if title and (string.find(title, "Обуздать твердыню") or string.find(title, "Норигорн")) then
-                        local trueID = logLink and string.match(logLink, "quest:(%d+)") or tostring(logQuestID or "Не найден")
-                        DEFAULT_CHAT_FRAME:AddMessage(string.format("|cffffaa00[Зонд-АНАЛИЗ %s]|r Найдено задание: |cffffffff'%s'|r", date("%H:%M:%S"), title))
-                        DEFAULT_CHAT_FRAME:AddMessage(string.format("  > Истинный ID из гиперссылки GetQuestLink -> |cff00ff00%s|r", tostring(trueID)))
-                    end
-                end
-                
-                if UpdateCurrentCharacterActivities then UpdateCurrentCharacterActivities() end
-                if DrawActivitiesTab and activitiesScrollFrame and activitiesScrollFrame:IsShown() then
-                    DrawActivitiesTab()
-                end
-            end
-        end)
+    -- Сдвигаем индекс карусели на следующий класс по кругу
+    currentRotationIndex = currentRotationIndex + 1
+    if currentRotationIndex > #SBPT_DisplayRotationList then
+        currentRotationIndex = 1
     end
-end)
---]]
 
---sbpt-v473: ВСЕЯДНЫЙ СКАНЕР ОКOН ВВОДА ДЛЯ ПОЛНОГО ОБХОДА ИЗОЛЯЦИИ ЧАТА ELVUI
-function DumpSirusLink()
-    local foundEditBox = nil
-    
-    -- 1. Проверяем стандартные указатели WoW API
-    if ChatEdit_GetActiveWindow and ChatEdit_GetActiveWindow() then
-        foundEditBox = ChatEdit_GetActiveWindow()
-    elseif LAST_ACTIVE_CHAT_EDIT_BOX and LAST_ACTIVE_CHAT_EDIT_BOX:IsShown() then
-        foundEditBox = LAST_ACTIVE_CHAT_EDIT_BOX
+    local currentItem = SBPT_DisplayRotationList[currentRotationIndex]
+    if currentItem and SirusBPMinimapButton and SirusBPMinimapButton.NotificationDot then
+        -- Получаем чистый, стопроцентный эталонный RGB цвет класса Blizzard
+        local colorTable = RAID_CLASS_COLORS[currentItem.class] or { r = 1, g = 0.5, b = 0 }
+        
+        -- Выставляем цвет. Прозрачность кружка ВСЕГДА жесткая и плотная = 1 (не тускнеет!)
+        SirusBPMinimapButton.NotificationDot:SetVertexColor(colorTable.r, colorTable.g, colorTable.b, 1)
+        SirusBPMinimapButton.NotificationDot:SetAlpha(1)
     end
-    
-    -- 2. Если ElvUI спрятал окно, жестко перебираем все 10 каналов чата Сируса
-    if not foundEditBox then
-        for i = 1, 10 do
-            local eb = _G["ChatFrame"..i.."EditBox"]
-            if eb and eb:IsShown() then
-                foundEditBox = eb
-                break
-            end
-        end
-    end
-    
-    -- 3. Извлекаем и дампим хэш ссылки Сируса
-    if foundEditBox then
-        local currentText = foundEditBox:GetText() or ""
-        if currentText ~= "" then
-            local cleanDump = string.gsub(currentText, "\124", "\\124")
-            DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00[SBPT-Анализатор]:|r " .. cleanDump)
-        else
-            DEFAULT_CHAT_FRAME:AddMessage("|cffff2020[SBPT-Ошибка]: Строка ввода чата пуста! Сначала линкните квест с Shift.|r")
+end
+
+pulseFrame:SetScript("OnUpdate", function(self, elapsed)
+    -- 1. ЖЕСТКИЙ СВЕТОФОР ЦВЕТОВ КЛАССОВ: Переключаем цвет ровно раз в 2 секунды (без затуханий по альфе!)
+    if #SBPT_DisplayRotationList > 1 then
+        colorTimer = colorTimer + elapsed
+        if colorTimer >= 2.0 then
+            colorTimer = 0
+            UpdateNextClassColorDiscrete()
         end
     else
-        DEFAULT_CHAT_FRAME:AddMessage("|cffff2020[SBPT-Ошибка]: Активное окно ввода чата ElvUI не найдено в ОЗУ!|r")
-    end
-end
-
---sbpt-v291: ЧАТ-СКАНЕР /СБПТСКАН ДЛЯ МГНОВЕННОГО ИЗВЛЕЧЕНИЯ СКРЫТЫХ ID ИЗ ССЫЛОК ЧАТА
-SLASH_SBPTFINDER1 = "/сбптскан"
-SLASH_SBPTFINDER2 = "/sbptscan"
-SlashCmdList["SBPTFINDER"] = function(msg)
-    -- Пытаемся захватить текст напрямую из активной строки ввода чата игры
-    local editBox = ChatEdit_GetActiveWindow()
-    local text = editBox and editBox:GetText() or msg
-    
-    if text and text ~= "" then
-        -- Ищем каноничный паттерн близзардовской ссылки квеста |Hquest:ID
-        local questID = string.match(text, "quest:(%d+)")
-        
-        if questID then
-            -- Вытаскиваем чистое имя квеста из ссылки, очищая текстовые теги
-            local questName = string.match(text, "|h%[(.-)%]|h") or "Задание"
-            return
+        -- Если актуальный твинк всего один — удерживаем его чистый цвет непрерывно
+        colorTimer = 0
+        local currentItem = SBPT_DisplayRotationList[1]
+        if currentItem and SirusBPMinimapButton and SirusBPMinimapButton.NotificationDot then
+            local colorTable = RAID_CLASS_COLORS[currentItem.class] or { r = 1, g = 0.5, b = 0 }
+            SirusBPMinimapButton.NotificationDot:SetVertexColor(colorTable.r, colorTable.g, colorTable.b, 1)
+            SirusBPMinimapButton.NotificationDot:SetAlpha(1)
         end
     end
     
-    DEFAULT_CHAT_FRAME:AddMessage("|cffff2020[Внимание]|r Ссылка квеста не найдена. Инструкция: Откройте чат, зажмите Shift и кликните по квесту в журнале, чтобы ссылка появилась в строке ввода, затем введите /сбптскан и нажмите Enter!")
+    -- 2. НЕОНОВОЕ ДЫХАНИЕ ФОНА ВКЛАДКИ (Для крупных кнопок интерфейса плавность альфы работает супер!)
+    tabAlpha = tabAlpha + (tabDirection * elapsed * 0.5)
+    if tabAlpha <= 0.1 then
+        tabAlpha = 0.1
+        tabDirection = 1
+    elseif tabAlpha >= 0.85 then
+        tabAlpha = 0.85
+        tabDirection = -1
+    end
+
+    if mainGui and mainGui:IsShown() and mainGui.myTabs then
+        local currentTab = SirusBPTrackerConfig and SirusBPTrackerConfig.ActiveTab or 1
+        if mainGui.myTabs[2] and mainGui.myTabs[2].SetBackdropColor and currentTab ~= 2 then
+            mainGui.myTabs[2]:SetBackdropColor(0.08, 0.20, 0.35, tabAlpha)
+            mainGui.myTabs[2]:SetBackdropBorderColor(0, 0.6, 0.9, tabAlpha)
+        end
+    end
+end)
+
+-- Вспомогательная функция пересчета уникального списка классов для карусели
+local function RebuildDisplayRotationList()
+    SBPT_DisplayRotationList = {}
+    local seenChars = {}
+    for _, info in pairs(SBPT_ActiveNotifications) do
+        local uniqueKey = info.charName
+        if not seenChars[uniqueKey] then
+            seenChars[uniqueKey] = true
+            table.insert(SBPT_DisplayRotationList, { charName = info.charName, class = info.class })
+        end
+    end
+    
+    if #SBPT_DisplayRotationList == 0 then
+        SBPT_ResetMinimapNotification()
+    elseif not pulseFrame:IsShown() then
+        currentRotationIndex = 0
+        colorTimer = 0
+        UpdateNextClassColorDiscrete() -- Заряжаем цвет первого твинка мгновенно
+        tabAlpha = 0.85
+        tabDirection = -1
+        if SirusBPMinimapButton and SirusBPMinimapButton.DotFrame then SirusBPMinimapButton.DotFrame:Show() end
+        pulseFrame:Show()
+    end
 end
+
+function SBPT_CheckAndIncrementNotification(questID, leaderName)
+    if not questID or type(questID) ~= "number" or not leaderName then return end
+    
+    local isMainFrameShown = mainGui and mainGui:IsShown()
+    local currentTab = SirusBPTrackerConfig and SirusBPTrackerConfig.ActiveTab or 1
+    if isMainFrameShown and currentTab == 2 then return end
+    
+    local syncKey = tostring(questID) .. "_" .. tostring(leaderName) .. "_"
+    local currentTime = time()
+    local currentRealm = GetRealmName()
+    local hasChanges = false
+    
+    -- Опрос ОЗУ-кэша твинков ramCacheDB по числовому ID квеста Сируса
+    if ramCacheDB and ramCacheDB[currentRealm] then
+        local realmData = ramCacheDB[currentRealm]
+        for charName, data in pairs(realmData) do
+            if charName ~= "QUEST_LFG" and type(data) == "table" and data.quests then
+                if SirusBPTrackerCharFilterDB and SirusBPTrackerCharFilterDB[charName] ~= false then
+                    local q = data.quests[questID]
+                    if q and q.progress ~= "Завершено" then
+                        local uniqueSyncKey = syncKey .. tostring(charName)
+                        if SBPT_ActiveNotifications[uniqueSyncKey] then
+                            SBPT_ActiveNotifications[uniqueSyncKey].time = currentTime
+                        else
+                            -- Сохраняем имя твинка и его класс для жесткого переключения
+                            SBPT_ActiveNotifications[uniqueSyncKey] = {
+                                time = currentTime,
+                                charName = charName,
+                                class = data.class or "WARRIOR"
+                            }
+                            hasChanges = true
+                        end
+                    end
+                end
+            end
+        end
+    end
+    if hasChanges then RebuildDisplayRotationList() end
+end
+
+function SBPT_ResetMinimapNotification()
+    SBPT_ActiveNotifications = {} 
+    SBPT_DisplayRotationList = {}
+    pulseFrame:Hide() 
+    if SirusBPMinimapButton and SirusBPMinimapButton.DotFrame then SirusBPMinimapButton.DotFrame:Hide() end
+    -- Принудительно возвращаем второй вкладке [2] её законный серый цвет и тусклую рамку при сбросе
+    if mainGui and mainGui.myTabs and mainGui.myTabs[2] and mainGui.myTabs[2].SetBackdropColor then
+        local currentTab = SirusBPTrackerConfig and SirusBPTrackerConfig.ActiveTab or 1
+        if currentTab ~= 2 then
+            mainGui.myTabs[2]:SetBackdropColor(0.05, 0.05, 0.05, 0.85)
+            mainGui.myTabs[2]:SetBackdropBorderColor(0.2, 0.2, 0.2, 1)
+        end
+    end
+end
+
+-- Автоматический 5-секундный цензор времени старения зазывал чата (Лимит 10 минут = 600 секунд)
+local SBPT_TimeUpdaterFrame = CreateFrame("Frame")
+local SBPT_LastTickTime = 0
+SBPT_TimeUpdaterFrame:SetScript("OnUpdate", function(self, elapsed)
+    SBPT_LastTickTime = SBPT_LastTickTime + elapsed
+    if SBPT_LastTickTime >= 5 then
+        SBPT_LastTickTime = 0
+        local currentTime = time()
+        if mainGui and mainGui:IsShown() then
+            local currentTab = SirusBPTrackerConfig and SirusBPTrackerConfig.ActiveTab or 1
+            if currentTab == 2 then SBPT_ResetMinimapNotification() return end
+        end
+        local hasChanges = false
+        for syncKey, info in pairs(SBPT_ActiveNotifications) do
+            if (currentTime - info.time) > 600 then
+                SBPT_ActiveNotifications[syncKey] = nil
+                hasChanges = true
+            end
+        end
+        if hasChanges then
+            RebuildDisplayRotationList()
+            local aliveCount = 0
+            for _, _ in pairs(SBPT_ActiveNotifications) do aliveCount = aliveCount + 1 end
+            if aliveCount == 0 and mainGui and mainGui.myTabs and mainGui.myTabs[2] and mainGui.myTabs[2].SetBackdropColor then
+                mainGui.myTabs[2]:SetBackdropColor(0.05, 0.05, 0.05, 0.85)
+                mainGui.myTabs[2]:SetBackdropBorderColor(0.2, 0.2, 0.2, 1)
+            end
+        end
+    end
+end)
