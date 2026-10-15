@@ -1,0 +1,42 @@
+name: Automatic Sirus Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+env:
+  ADDON_NAME: SirusBPTracker
+
+jobs:
+  build:
+    name: Build and Pack Addon
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Create Clean ZIP Archive
+        run: |
+          git archive \
+            --format=zip \
+            --prefix=${{ env.ADDON_NAME }}/ \
+            -o ${{ env.ADDON_NAME }}.zip \
+            HEAD
+
+      - name: Upload Artifact to GitHub
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ADDON_NAME }}
+          path: ${{ env.ADDON_NAME }}.zip
+
+      - name: Upload ZIP to Release Asset
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ADDON_NAME }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
