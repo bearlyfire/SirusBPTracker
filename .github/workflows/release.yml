@@ -19,13 +19,13 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4.2.2
 
-      - name: Pack Addon via Pure Git Archive
+      - name: Pack Addon via Pure Zip Extension
         run: |
-          git archive \
-            --format=zip \
-            --prefix=${{ env.ADDON_NAME }}/ \
-            -o ${{ env.ADDON_NAME }}.zip \
-            origin/master
+          cd ..
+          zip -r ${{ github.workspace }}/${{ env.ADDON_NAME }}.zip ${{ github.workspace }} \
+            -x "*/.*" \
+            -x "*/README.md"
+          printf "@ ${{ github.workspace }}\n@=${{ env.ADDON_NAME }}\n" | zipnote -w ${{ github.workspace }}/${{ env.ADDON_NAME }}.zip
 
       - name: Upload Artifact to GitHub
         uses: actions/upload-artifact@v4.4.3
