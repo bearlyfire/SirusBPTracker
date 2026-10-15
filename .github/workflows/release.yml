@@ -17,25 +17,25 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
 
-      - name: Create Clean ZIP Archive
+      - name: Pack Addon via Pure Git Archive
         run: |
           git archive \
             --format=zip \
             --prefix=${{ env.ADDON_NAME }}/ \
             -o ${{ env.ADDON_NAME }}.zip \
-            HEAD
+            origin/master
 
       - name: Upload Artifact to GitHub
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.4.3
         with:
           name: ${{ env.ADDON_NAME }}
           path: ${{ env.ADDON_NAME }}.zip
 
       - name: Upload ZIP to Release Asset
         if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v2.0.1
         with:
           files: ${{ env.ADDON_NAME }}.zip
         env:
