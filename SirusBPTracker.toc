@@ -1,10 +1,10 @@
 ## Interface: 30300
 ## Title: Sirus BP Tracker
-## Notes: Отслеживание боевого пропуска для всех персонажей
+## Notes: Отслеживание заданий боевого пропуска для всех персонажей
 ## Author: Медведж
-## Version: 1.21
+## Version: 1.2.1
 ## SavedVariables: SirusBPTrackerDB, SirusBPTrackerFilterDB, SirusBPTrackerCharFilterDB, SirusBPTrackerConfig
-## X-Sirus-Update: https://github.com/bearlyfire/SirusBPTracker/tree/main
-## X-Sirus-Category 17
+## X-Sirus-Update: https://github.com/bearlyfire/SirusBPTracker/tree/master
+## X-Sirus-Category: 17
 
 SirusBPTracker.lua
