@@ -2634,19 +2634,19 @@ sbptActivityTimerFrame:SetScript("OnUpdate", function(self, elapsed)
 end)
 
 --- ===========================
---sbpt-v637: ДИСКРЕТНЫЙ МОДУЛЬ СВЕТОФОРА ЦВЕТОВ КЛАССОВ (БЕЗ ЗАТУХАНИЯ) И НЕОНОВОГО ДЫХАНИЯ ВКЛАДКИ
-local SBPT_ActiveNotifications = {} -- Живые связки ["ID_Лидер_Твинк"] = { time, charName, class }
-local SBPT_DisplayRotationList = {} -- Локальный упорядоченный список классов для карусели
+--sbpt-v640: МОДУЛЬ ДИСКРЕТНОЙ КАРУСЕЛИ С ЗАЩИТОЙ ОТ ПОВТОРНОГО СПАМА ПРОЧИТАННЫХ СБОРОВ
+local SBPT_ActiveNotifications = {} -- Текущие уведомления, зажигающие кружок
+local SBPT_ReadInSession = {}       -- Чёрный список прочитанных сборов ["ID_Лидер"] = время_чтения
+local SBPT_DisplayRotationList = {} 
 local currentRotationIndex = 1
 
 local pulseFrame = CreateFrame("Frame")
 pulseFrame:Hide() 
 
-local colorTimer = 0 -- Жесткий секундный таймер для смены цветов классов
+local colorTimer = 0 
 local tabAlpha = 1
 local tabDirection = -1
 
--- Функция мгновенного, дискретного переключения цвета класса без градиентной каши
 local function UpdateNextClassColorDiscrete()
     if #SBPT_DisplayRotationList == 0 then
         if SirusBPMinimapButton and SirusBPMinimapButton.DotFrame then SirusBPMinimapButton.DotFrame:Hide() end
@@ -2654,25 +2654,19 @@ local function UpdateNextClassColorDiscrete()
         return
     end
 
-    -- Сдвигаем индекс карусели на следующий класс по кругу
     currentRotationIndex = currentRotationIndex + 1
-    if currentRotationIndex > #SBPT_DisplayRotationList then
-        currentRotationIndex = 1
-    end
+    if currentRotationIndex > #SBPT_DisplayRotationList then currentRotationIndex = 1 end
 
     local currentItem = SBPT_DisplayRotationList[currentRotationIndex]
     if currentItem and SirusBPMinimapButton and SirusBPMinimapButton.NotificationDot then
-        -- Получаем чистый, стопроцентный эталонный RGB цвет класса Blizzard
         local colorTable = RAID_CLASS_COLORS[currentItem.class] or { r = 1, g = 0.5, b = 0 }
-        
-        -- Выставляем цвет. Прозрачность кружка ВСЕГДА жесткая и плотная = 1 (не тускнеет!)
         SirusBPMinimapButton.NotificationDot:SetVertexColor(colorTable.r, colorTable.g, colorTable.b, 1)
         SirusBPMinimapButton.NotificationDot:SetAlpha(1)
     end
 end
 
 pulseFrame:SetScript("OnUpdate", function(self, elapsed)
-    -- 1. ЖЕСТКИЙ СВЕТОФОР ЦВЕТОВ КЛАССОВ: Переключаем цвет ровно раз в 2 секунды (без затуханий по альфе!)
+    -- 1. СВЕТОФОР ЦВЕТОВ КЛАССОВ (100% яркости, шаг 2 секунды)
     if #SBPT_DisplayRotationList > 1 then
         colorTimer = colorTimer + elapsed
         if colorTimer >= 2.0 then
@@ -2680,7 +2674,6 @@ pulseFrame:SetScript("OnUpdate", function(self, elapsed)
             UpdateNextClassColorDiscrete()
         end
     else
-        -- Если актуальный твинк всего один — удерживаем его чистый цвет непрерывно
         colorTimer = 0
         local currentItem = SBPT_DisplayRotationList[1]
         if currentItem and SirusBPMinimapButton and SirusBPMinimapButton.NotificationDot then
@@ -2690,15 +2683,10 @@ pulseFrame:SetScript("OnUpdate", function(self, elapsed)
         end
     end
     
-    -- 2. НЕОНОВОЕ ДЫХАНИЕ ФОНА ВКЛАДКИ (Для крупных кнопок интерфейса плавность альфы работает супер!)
+    -- 2. НЕОНОВОЕ ДЫХАНИЕ ФОНА ВКЛАДКИ СБОРОВ
     tabAlpha = tabAlpha + (tabDirection * elapsed * 0.5)
-    if tabAlpha <= 0.1 then
-        tabAlpha = 0.1
-        tabDirection = 1
-    elseif tabAlpha >= 0.85 then
-        tabAlpha = 0.85
-        tabDirection = -1
-    end
+    if tabAlpha <= 0.1 then tabAlpha = 0.1 tabDirection = 1
+    elseif tabAlpha >= 0.85 then tabAlpha = 0.85 tabDirection = -1 end
 
     if mainGui and mainGui:IsShown() and mainGui.myTabs then
         local currentTab = SirusBPTrackerConfig and SirusBPTrackerConfig.ActiveTab or 1
@@ -2709,7 +2697,6 @@ pulseFrame:SetScript("OnUpdate", function(self, elapsed)
     end
 end)
 
--- Вспомогательная функция пересчета уникального списка классов для карусели
 local function RebuildDisplayRotationList()
     SBPT_DisplayRotationList = {}
     local seenChars = {}
@@ -2722,11 +2709,12 @@ local function RebuildDisplayRotationList()
     end
     
     if #SBPT_DisplayRotationList == 0 then
-        SBPT_ResetMinimapNotification()
+        if SirusBPMinimapButton and SirusBPMinimapButton.DotFrame then SirusBPMinimapButton.DotFrame:Hide() end
+        pulseFrame:Hide()
     elseif not pulseFrame:IsShown() then
         currentRotationIndex = 0
         colorTimer = 0
-        UpdateNextClassColorDiscrete() -- Заряжаем цвет первого твинка мгновенно
+        UpdateNextClassColorDiscrete()
         tabAlpha = 0.85
         tabDirection = -1
         if SirusBPMinimapButton and SirusBPMinimapButton.DotFrame then SirusBPMinimapButton.DotFrame:Show() end
@@ -2741,12 +2729,17 @@ function SBPT_CheckAndIncrementNotification(questID, leaderName)
     local currentTab = SirusBPTrackerConfig and SirusBPTrackerConfig.ActiveTab or 1
     if isMainFrameShown and currentTab == 2 then return end
     
-    local syncKey = tostring(questID) .. "_" .. tostring(leaderName) .. "_"
+    -- ЗАЩИТНЫЙ РУБЕЖ: Если эта связка Квест+Лидер находится в черном списке прочитанного — ПОЛНОСТЬЮ ИГНОРИРУЕМ СПАМ!
+    local mainSyncKey = tostring(questID) .. "_" .. tostring(leaderName)
+    if SBPT_ReadInSession[mainSyncKey] then
+        SBPT_ReadInSession[mainSyncKey] = time() -- Просто обновляем время активности лидера
+        return
+    end
+    
     local currentTime = time()
     local currentRealm = GetRealmName()
     local hasChanges = false
     
-    -- Опрос ОЗУ-кэша твинков ramCacheDB по числовому ID квеста Сируса
     if ramCacheDB and ramCacheDB[currentRealm] then
         local realmData = ramCacheDB[currentRealm]
         for charName, data in pairs(realmData) do
@@ -2754,11 +2747,11 @@ function SBPT_CheckAndIncrementNotification(questID, leaderName)
                 if SirusBPTrackerCharFilterDB and SirusBPTrackerCharFilterDB[charName] ~= false then
                     local q = data.quests[questID]
                     if q and q.progress ~= "Завершено" then
-                        local uniqueSyncKey = syncKey .. tostring(charName)
+                        local uniqueSyncKey = mainSyncKey .. "_" .. tostring(charName)
+                        
                         if SBPT_ActiveNotifications[uniqueSyncKey] then
                             SBPT_ActiveNotifications[uniqueSyncKey].time = currentTime
                         else
-                            -- Сохраняем имя твинка и его класс для жесткого переключения
                             SBPT_ActiveNotifications[uniqueSyncKey] = {
                                 time = currentTime,
                                 charName = charName,
@@ -2774,12 +2767,23 @@ function SBPT_CheckAndIncrementNotification(questID, leaderName)
     if hasChanges then RebuildDisplayRotationList() end
 end
 
+-- Функция сброса индикации при посещении вкладки Сборов
 function SBPT_ResetMinimapNotification()
+    -- ИСПРАВЛЕНО: Перед тем как стереть текущие уведомления, переносим их заголовки в черный список прочитанного!
+    for uniqueSyncKey, info in pairs(SBPT_ActiveNotifications) do
+        -- Вырезаем чистый ключ Квест_Лидер (первые два элемента до имени твинка)
+        local questID, leaderName = string.match(uniqueSyncKey, "^([%d]+)_([^_]+)")
+        if questID and leaderName then
+            local mainSyncKey = questID .. "_" .. leaderName
+            SBPT_ReadInSession[mainSyncKey] = time() -- Запоминаем, что этот сбор прочитан Медведжем!
+        end
+    end
+
     SBPT_ActiveNotifications = {} 
     SBPT_DisplayRotationList = {}
     pulseFrame:Hide() 
     if SirusBPMinimapButton and SirusBPMinimapButton.DotFrame then SirusBPMinimapButton.DotFrame:Hide() end
-    -- Принудительно возвращаем второй вкладке [2] её законный серый цвет и тусклую рамку при сбросе
+    
     if mainGui and mainGui.myTabs and mainGui.myTabs[2] and mainGui.myTabs[2].SetBackdropColor then
         local currentTab = SirusBPTrackerConfig and SirusBPTrackerConfig.ActiveTab or 1
         if currentTab ~= 2 then
@@ -2789,7 +2793,7 @@ function SBPT_ResetMinimapNotification()
     end
 end
 
--- Автоматический 5-секундный цензор времени старения зазывал чата (Лимит 10 минут = 600 секунд)
+-- Автоматический 5-секундный цензор времени старения (Лимит 10 минут)
 local SBPT_TimeUpdaterFrame = CreateFrame("Frame")
 local SBPT_LastTickTime = 0
 SBPT_TimeUpdaterFrame:SetScript("OnUpdate", function(self, elapsed)
@@ -2797,10 +2801,13 @@ SBPT_TimeUpdaterFrame:SetScript("OnUpdate", function(self, elapsed)
     if SBPT_LastTickTime >= 5 then
         SBPT_LastTickTime = 0
         local currentTime = time()
+        
         if mainGui and mainGui:IsShown() then
             local currentTab = SirusBPTrackerConfig and SirusBPTrackerConfig.ActiveTab or 1
             if currentTab == 2 then SBPT_ResetMinimapNotification() return end
         end
+        
+        -- 1. Ревизия старения текущих уведомлений
         local hasChanges = false
         for syncKey, info in pairs(SBPT_ActiveNotifications) do
             if (currentTime - info.time) > 600 then
@@ -2808,6 +2815,14 @@ SBPT_TimeUpdaterFrame:SetScript("OnUpdate", function(self, elapsed)
                 hasChanges = true
             end
         end
+        
+        -- 2. Ревизия старения черного списка ПРОЧИТАННОГО (Если лидер молчит больше 10 минут — даем ему право зажечь лапу снова когда-то потом)
+        for mainSyncKey, readTime in pairs(SBPT_ReadInSession) do
+            if (currentTime - readTime) > 600 then
+                SBPT_ReadInSession[mainSyncKey] = nil
+            end
+        end
+        
         if hasChanges then
             RebuildDisplayRotationList()
             local aliveCount = 0
