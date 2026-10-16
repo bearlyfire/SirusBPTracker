@@ -9,7 +9,6 @@ frame:RegisterEvent("UNIT_QUEST_LOG_CHANGED")
 --sbpt-v336: РЕГИСТРАЦИЯ СЕРВЕРНОГО СИГНАЛА ГОТОВНОСТИ ДАННЫХ КД
 frame:RegisterEvent("QUEST_QUERY_COMPLETE")
 
-
 -- Просто объявляем имена для БД
 SirusBPTrackerDB = SirusBPTrackerDB
 SirusBPTrackerFilterDB = SirusBPTrackerFilterDB
