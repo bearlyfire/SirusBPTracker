@@ -14,6 +14,7 @@ SirusBPTrackerDB = SirusBPTrackerDB
 SirusBPTrackerFilterDB = SirusBPTrackerFilterDB
 SirusBPTrackerCharFilterDB = SirusBPTrackerCharFilterDB
 SirusBPTrackerConfig = SirusBPTrackerConfig
+SirusBPTrackerNewQuestDB = SirusBPTrackerNewQuestDB
 
 -- Таблица чистых HEX-цветов классов
 local CLASS_COLORS = {
@@ -29,6 +30,7 @@ local fontStringPool = {}
 local activeStrings = {}
 --sbpt-v173: ОБЪЯВЛЕНИЕ ВЫСОКОПРОИЗВОДИТЕЛЬНОГО ОЗУ-КЭША ДЛЯ ЗАЩИТЫ ДИСКА ОТ МИКРОФРИЗОВ
 local ramCacheDB = {}
+local bonusXPApiErrorReported = false
 
 local function GetAnyText(obj)
     if not obj then return nil end
@@ -46,41 +48,296 @@ local helpGui = nil
 local UpdateGUIText
 local CreateFilterGUI
 local CreateHelpGUI
+local MAIN_MIN_WIDTH = 430
+local MAIN_MIN_HEIGHT = 250
+local PROGRESS_COLUMN_MIN_WIDTH = 205
+local PROGRESS_COLUMN_GAP = 8
+local MAIN_FONT_MIN_SIZE = 9
+local MAIN_FONT_MAX_SIZE = 16
+local newQuestTagLabels = {}
+local newQuestTagPulse = CreateFrame("Frame")
+local newQuestTagPulseElapsed = 0
+local newQuestTagPulseAlpha = 1
+newQuestTagPulse:SetScript("OnUpdate", function(self, elapsed)
+    if #newQuestTagLabels == 0 then
+        self:Hide()
+        return
+    end
+    newQuestTagPulseElapsed = newQuestTagPulseElapsed + elapsed
+    if newQuestTagPulseElapsed >= 0.45 then
+        newQuestTagPulseElapsed = 0
+        newQuestTagPulseAlpha = newQuestTagPulseAlpha == 1 and 0.25 or 1
+        for _, label in ipairs(newQuestTagLabels) do
+            if label:IsShown() then label:SetAlpha(newQuestTagPulseAlpha) end
+        end
+    end
+end)
+newQuestTagPulse:Hide()
+
+local characterSummaryItems = {}
+local characterSummaryPulse = CreateFrame("Frame")
+local characterSummaryElapsed = 0
+local characterSummaryAlpha = 1
+characterSummaryPulse:SetScript("OnUpdate", function(self, elapsed)
+    characterSummaryElapsed = characterSummaryElapsed + elapsed
+    if characterSummaryElapsed >= 0.45 then
+        characterSummaryElapsed = 0
+        characterSummaryAlpha = characterSummaryAlpha == 1 and 0.35 or 1
+        for _, item in ipairs(characterSummaryItems) do
+            if item.warning and item.name then
+                local red, green, blue = unpack(item.classColor)
+                if characterSummaryAlpha < 1 then
+                    item.name:SetTextColor(0.65, 0.65, 0.65, 1)
+                else
+                    item.name:SetTextColor(red, green, blue, 1)
+                end
+            end
+        end
+    end
+    self.refreshElapsed = (self.refreshElapsed or 0) + elapsed
+    if self.refreshElapsed >= 2 then
+        self.refreshElapsed = 0
+        if mainGui and mainGui:IsShown() and mainGui.UpdateCharacterSummary then
+            mainGui.UpdateCharacterSummary()
+        end
+    end
+end)
+
+local function GetQuestPeriodStart(questType, currentTime)
+    local reset = date("*t", currentTime)
+    reset.hour = 3
+    reset.min = 0
+    reset.sec = 0
+    local resetTime = time(reset)
+    if tonumber(questType) == 1 then
+        if currentTime < resetTime then resetTime = resetTime - 86400 end
+        return resetTime
+    end
+    local daysSinceThursday = reset.wday - 5
+    if daysSinceThursday < 0 then daysSinceThursday = daysSinceThursday + 7 end
+    resetTime = resetTime - (daysSinceThursday * 86400)
+    if reset.wday == 5 and currentTime < resetTime then
+        resetTime = resetTime - (7 * 86400)
+    end
+    return resetTime
+end
+
+local function GetCharacterResetWarnings(charData, currentTime)
+    local lastScanTime = tonumber(charData and charData.lastScanTime)
+    if not lastScanTime then return true, true end
+    return lastScanTime < GetQuestPeriodStart(1, currentTime),
+        lastScanTime < GetQuestPeriodStart(2, currentTime)
+end
+
+local function IsNewTrackedQuest(realm, characters)
+    if not SirusBPTrackerNewQuestDB or not SirusBPTrackerNewQuestDB[realm] then return false end
+    local currentTime = time()
+    for _, character in ipairs(characters) do
+        local questID = character.questID or (character.rawQuest and character.rawQuest.id)
+        local record = SirusBPTrackerNewQuestDB[realm][character.name]
+        local newQuest = record and record.newQuests and record.newQuests[tostring(questID)]
+        if newQuest and newQuest.periodStart == GetQuestPeriodStart(newQuest.type, currentTime) then
+            return true
+        end
+    end
+    return false
+end
+
+local RED_BUTTON_COLOR = { 0.38, 0.07, 0.08, 0.95 }
+local RED_BUTTON_HOVER_COLOR = { 0.56, 0.10, 0.10, 1 }
+local BLUE_TAB_COLOR = { 0.08, 0.22, 0.38, 0.95 }
+local escapeFrameUpdate = CreateFrame("Frame")
+
+local function GetMainBackgroundColor()
+    local color = SirusBPTrackerConfig and SirusBPTrackerConfig.BackgroundColor
+    if type(color) == "table" then
+        local r, g, b = tonumber(color[1]), tonumber(color[2]), tonumber(color[3])
+        if r and g and b then return r, g, b end
+    end
+    return 0.12, 0.14, 0.18
+end
+
+local function GetProgressBarColor()
+    local color = SirusBPTrackerConfig and SirusBPTrackerConfig.ProgressBarColor
+    if type(color) == "table" then
+        local r, g, b = tonumber(color[1]), tonumber(color[2]), tonumber(color[3])
+        if r and g and b then return r, g, b end
+    end
+    return 0, 0.5, 0.6
+end
+
+local function GetMainFontSize()
+    local size = tonumber(SirusBPTrackerConfig and SirusBPTrackerConfig.FontSize) or 11
+    return math.max(MAIN_FONT_MIN_SIZE, math.min(MAIN_FONT_MAX_SIZE, math.floor(size + 0.5)))
+end
+
+local function SetAddonBackgroundColor(frame)
+    if not frame or not frame.SetBackdropColor then return end
+    local r, g, b = GetMainBackgroundColor()
+    frame:SetBackdropColor(r, g, b, 0.8)
+end
+
+local function RemoveAddonEscapeFrame(frameName)
+    for i = #UISpecialFrames, 1, -1 do
+        if UISpecialFrames[i] == frameName then
+            table.remove(UISpecialFrames, i)
+        end
+    end
+end
+
+local function UpdateAddonEscapeFrame()
+    RemoveAddonEscapeFrame("SirusBPMainFrame")
+    RemoveAddonEscapeFrame("SirusBPFilterGUI")
+    RemoveAddonEscapeFrame("SirusBPHelpGUI")
+
+    local activeFrameName
+    if helpGui and helpGui:IsShown() then
+        activeFrameName = "SirusBPHelpGUI"
+    elseif filterGui and filterGui:IsShown() then
+        activeFrameName = "SirusBPFilterGUI"
+    elseif mainGui and mainGui:IsShown() then
+        activeFrameName = "SirusBPMainFrame"
+    end
+    if activeFrameName then
+        table.insert(UISpecialFrames, activeFrameName)
+    end
+end
+
+local function ScheduleAddonEscapeFrameUpdate()
+    escapeFrameUpdate.elapsed = 0
+    escapeFrameUpdate:Show()
+    escapeFrameUpdate:SetScript("OnUpdate", function(self, elapsed)
+        self.elapsed = self.elapsed + elapsed
+        if self.elapsed >= 0.1 then
+            self:SetScript("OnUpdate", nil)
+            UpdateAddonEscapeFrame()
+        end
+    end)
+end
+
+local settingsFontDefaults = setmetatable({}, { __mode = "k" })
+local function ApplySettingsFontSize(root)
+    if not root then return end
+    local fontSize = GetMainFontSize()
+    local function Visit(frame)
+        local regions = { frame:GetRegions() }
+        for _, region in ipairs(regions) do
+            if region and region:IsObjectType("FontString") then
+                local font, size, flags = region:GetFont()
+                if font and size then
+                    if not settingsFontDefaults[region] then
+                        settingsFontDefaults[region] = { font = font, size = size, flags = flags }
+                    end
+                    local original = settingsFontDefaults[region]
+                    region:SetFont(original.font, math.max(8, math.floor(original.size * fontSize / 11 + 0.5)), original.flags)
+                end
+            end
+        end
+        local children = { frame:GetChildren() }
+        for _, child in ipairs(children) do
+            Visit(child)
+        end
+    end
+    Visit(root)
+end
+
+local function SetRedButtonStyle(button)
+    if not button.SetBackdrop then return end
+    button:SetBackdrop({
+        bgFile = "Interface\\Buttons\\WHITE8X8",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 8, edgeSize = 10, insets = { left = 2, right = 2, top = 2, bottom = 2 }
+    })
+    button:SetBackdropColor(unpack(RED_BUTTON_COLOR))
+    button:SetBackdropBorderColor(0.65, 0.18, 0.18, 1)
+    button:SetScript("OnEnter", function(self)
+        self:SetBackdropColor(unpack(RED_BUTTON_HOVER_COLOR))
+        self:SetBackdropBorderColor(0.95, 0.65, 0.2, 1)
+    end)
+    button:SetScript("OnLeave", function(self)
+        self:SetBackdropColor(unpack(RED_BUTTON_COLOR))
+        self:SetBackdropBorderColor(0.65, 0.18, 0.18, 1)
+    end)
+end
+
+local function SetBlueTabStyle(button, active)
+    button:SetBackdrop({
+        bgFile = "Interface\\Buttons\\WHITE8X8",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 8, edgeSize = 10, insets = { left = 2, right = 2, top = 2, bottom = 2 }
+    })
+    if active then
+        button:SetBackdropColor(unpack(BLUE_TAB_COLOR))
+        button:SetBackdropBorderColor(0.25, 0.65, 0.9, 1)
+        if button.text then button.text:SetTextColor(1, 0.82, 0) end
+    else
+        button:SetBackdropColor(0.04, 0.06, 0.10, 0.85)
+        button:SetBackdropBorderColor(0.18, 0.24, 0.32, 1)
+        if button.text then button.text:SetTextColor(0.65, 0.7, 0.78) end
+    end
+end
 
 --sbpt-v50-ui-rebuild: ПОЛНОЕ ОБНОВЛЕНИЕ СТРУКТУРЫ ОКНА (ПРАВИЛЬНЫЕ ВКЛАДКИ)
 CreateMainGUI = function()
     if mainGui then return mainGui end
 
+    if not SirusBPTrackerConfig then SirusBPTrackerConfig = {} end
     local gui = CreateFrame("Frame", "SirusBPMainFrame", UIParent)
 	--sbpt-v466: РЕГИСТРАЦИЯ ГЛАВНОГО ОКНА АДДОНА В СИСТЕМЕ ВСПЛЫВАЮЩИХ ОКOН ДЛЯ ЗАКРЫТИЯ ПО ESC
-    tinsert(UISpecialFrames, "SirusBPTrackerMainFrame")
+    gui:SetScript("OnHide", ScheduleAddonEscapeFrameUpdate)
 
-    gui:SetSize(520, 450)
+    local savedWidth = math.min(UIParent:GetWidth(), math.max(MAIN_MIN_WIDTH, tonumber(SirusBPTrackerConfig.MainFrameWidth) or 520))
+    local savedHeight = math.min(UIParent:GetHeight(), math.max(MAIN_MIN_HEIGHT, tonumber(SirusBPTrackerConfig.MainFrameHeight) or 450))
+    gui:SetSize(savedWidth, savedHeight)
     gui:SetPoint("CENTER", 0, 0)
+    gui:SetResizable(true)
+    gui:SetMinResize(MAIN_MIN_WIDTH, MAIN_MIN_HEIGHT)
+    gui:SetMaxResize(UIParent:GetWidth(), UIParent:GetHeight())
     gui:SetBackdrop({
-        bgFile = "Interface\\ChatFrame\\ChatFrameBackground", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        tile = true, tileSize = 16, edgeSize = 16, insets = { left = 4, right = 4, top = 4, bottom = 4 }
+        bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = false, edgeSize = 16, insets = { left = 4, right = 4, top = 4, bottom = 4 }
     })
-    gui:SetBackdropColor(0, 0, 0, 0.9)
+    SetAddonBackgroundColor(gui)
     gui:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
+
+    local headerBackground = gui:CreateTexture(nil, "BACKGROUND")
+    headerBackground:SetTexture("Interface\\Buttons\\WHITE8X8")
+    headerBackground:SetPoint("TOPLEFT", gui, "TOPLEFT", 4, -4)
+    headerBackground:SetPoint("TOPRIGHT", gui, "TOPRIGHT", -4, -4)
+    headerBackground:SetHeight(29)
+    headerBackground:SetVertexColor(0, 0, 0, 0.45)
 
     -- Область перемещения за верхнюю рамку (высота 30 пикселей)
     gui:SetMovable(true)
     gui:EnableMouse(true)
     local titleRegion = gui:CreateTitleRegion()
     titleRegion:SetPoint("TOPLEFT", gui, "TOPLEFT", 0, 0)
-    titleRegion:SetPoint("BOTTOMRIGHT", gui, "TOPRIGHT", -180, -30)
+    titleRegion:SetPoint("BOTTOMRIGHT", gui, "TOPRIGHT", -310, -30)
 
     local title = gui:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     title:SetPoint("TOPLEFT", 16, -15)
     title:SetText("Sirus BP Tracker")
 
+    local topControls = CreateFrame("Frame", nil, gui)
+    topControls:SetSize(116, 28)
+    topControls:SetPoint("TOP", gui, "TOP", 0, -5)
+
     local closeBtn = CreateFrame("Button", nil, gui, "UIPanelCloseButton")
-    closeBtn:SetPoint("TOPRIGHT", -3, -3)
+    closeBtn:SetPoint("TOPRIGHT", topControls, "TOPRIGHT", 0, 4)
+    SetRedButtonStyle(closeBtn)
+    closeBtn:SetBackdrop({
+        bgFile = "Interface\\Buttons\\WHITE8X8",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 8, edgeSize = 10,
+        insets = { left = 7, right = 7, top = 7, bottom = 7 }
+    })
+    closeBtn:SetBackdropColor(unpack(RED_BUTTON_COLOR))
+    closeBtn:SetBackdropBorderColor(0.65, 0.18, 0.18, 1)
 
     local filterBtn = CreateFrame("Button", nil, gui)
     filterBtn:SetSize(20, 20)
     filterBtn:SetPoint("TOPRIGHT", closeBtn, "TOPLEFT", -2, -5)
+    SetRedButtonStyle(filterBtn)
     filterBtn:SetNormalTexture("Interface\\Buttons\\UI-OptionsButton")
     filterBtn:SetPushedTexture("Interface\\Buttons\\UI-OptionsButton")
     filterBtn:SetHighlightTexture("Interface\\Buttons\\UI-Common-MouseHilight", "ADD")
@@ -95,6 +352,7 @@ CreateMainGUI = function()
     local helpBtn = CreateFrame("Button", "SirusBPHelpButton", gui)
     helpBtn:SetSize(20, 20) -- Установили идеальный размер 20x20 вровень с шестеренкой настроек
     helpBtn:SetPoint("RIGHT", filterBtn, "LEFT", -5, 0) -- Садится строго левее шестеренки
+    SetRedButtonStyle(helpBtn)
     helpBtn:SetHighlightTexture("Interface\\Buttons\\UI-Common-MouseHilight", "ADD")
     
     -- Применяем фирменную темную полупрозрачную подложку нашего аддона
@@ -103,8 +361,8 @@ CreateMainGUI = function()
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
         tile = true, tileSize = 16, edgeSize = 10, insets = { left = 2, right = 2, top = 2, bottom = 2 }
     })
-    helpBtn:SetBackdropColor(0, 0, 0, 0.8)
-    helpBtn:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
+    helpBtn:SetBackdropColor(unpack(RED_BUTTON_COLOR))
+    helpBtn:SetBackdropBorderColor(0.65, 0.18, 0.18, 1)
 
     -- Рисуем аккуратный, центрированный знак вопроса без сверхжирных наложений
     local helpBtnText = helpBtn:CreateFontString(nil, "OVERLAY")
@@ -117,13 +375,13 @@ CreateMainGUI = function()
 
     -- Подсветка при наведении мыши
     helpBtn:SetScript("OnEnter", function(self)
-        self:SetBackdropColor(0.15, 0.25, 0.35, 0.95)
-        self:SetBackdropBorderColor(0, 0.7, 1, 1)
+        self:SetBackdropColor(unpack(RED_BUTTON_HOVER_COLOR))
+        self:SetBackdropBorderColor(0.95, 0.65, 0.2, 1)
         self.text:SetTextColor(1, 1, 1)
     end)
     helpBtn:SetScript("OnLeave", function(self)
-        self:SetBackdropColor(0.1, 0.1, 0.1, 0.9)
-        self:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
+        self:SetBackdropColor(unpack(RED_BUTTON_COLOR))
+        self:SetBackdropBorderColor(0.65, 0.18, 0.18, 1)
         self.text:SetTextColor(1, 0.82, 0)
     end)
 
@@ -137,16 +395,14 @@ CreateMainGUI = function()
 --sbpt-v108-help-button-final: КОНЕЦ ФИКСА КНОПКИ
 --sbpt-v195: КНОПКА "БП" С АДРЕСНЫМ КЛИКОМ ПО НАДЛЕЖАЩЕЙ КНОПКЕ СИРУСА И СТАБИЛЬНЫМ СДВИГОМ ПОИСКА
 --sbpt-v286: СКРЫТИЕ КАСТОМНОЙ КНОПКИ БП ДЛЯ ПЕРСОНАЖЕЙ НИЖЕ 80 УРОВНЯ
-    local sirusBpOpenBtn = CreateFrame("Button", "SirusBPOpenNativeBtn", gui, "UIPanelButtonTemplate")
+    local sirusBpOpenBtn = CreateFrame("Button", "SirusBPOpenNativeBtn", gui)
     sirusBpOpenBtn:SetSize(32, 20)
     sirusBpOpenBtn:SetPoint("RIGHT", helpBtn, "LEFT", -5, 0) -- Садится ровно левее золотого знака "?"
-    sirusBpOpenBtn:SetText("БП")
-    
-    if sirusBpOpenBtn.Text then
-        sirusBpOpenBtn.Text:SetFont("Fonts\\FRIZQT__.TTF", 10, "OUTLINE")
-    elseif _G[sirusBpOpenBtn:GetName() .. "Text"] then
-        _G[sirusBpOpenBtn:GetName() .. "Text"]:SetFont("Fonts\\FRIZQT__.TTF", 10, "OUTLINE")
-    end
+    SetRedButtonStyle(sirusBpOpenBtn)
+    local sirusBpOpenText = sirusBpOpenBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    sirusBpOpenText:SetPoint("CENTER")
+    sirusBpOpenText:SetFont("Fonts\\FRIZQT__.TTF", 10, "OUTLINE")
+    sirusBpOpenText:SetText("БП")
 
     -- ЖЕЛЕЗНЫЙ ФИЛЬТР УРОВНЯ: Если персонаж ниже 80 уровня, наша кнопка бесшумно скрывается с холста
     local playerLevel = UnitLevel("player") or 1
@@ -160,15 +416,30 @@ CreateMainGUI = function()
         -- Дополнительный рубеж безопасности: блокируем клик, если кнопку вызвали из стороннего макроса
         if (UnitLevel("player") or 1) < 80 then return end
 
-        -- 1. Сначала открываем само официальное окно БП Сируса
+        -- Не трогаем окно, если оно уже открыто.
+        if BattlePassFrame and BattlePassFrame.IsShown and BattlePassFrame:IsShown() then
+            return
+        end
+
+        -- Открываем официальное окно БП Сируса.
         if ToggleBattlePassFrame then
             pcall(ToggleBattlePassFrame)
         elseif BattlePassFrame and BattlePassFrame.Show then
-            if BattlePassFrame:IsShown() then BattlePassFrame:Hide() else BattlePassFrame:Show() end
+            BattlePassFrame:Show()
         end
 
-        -- 2. ИДЕАЛЬНЫЙ АДРЕСНЫЙ ТРИГГЕР: Имитируем щелчок по родной глобальной кнопке Сируса!
-        if BattlePassFrame and BattlePassFrame:IsShown() then
+        local frame = BattlePassFrame
+        if frame and frame:IsShown() and UIParent and GetScreenWidth and GetScreenHeight then
+            local screenWidth, screenHeight = GetScreenWidth(), GetScreenHeight()
+            if screenWidth > 0 and screenHeight > 0 then
+                local nativeScale = math.min(screenWidth / 1920, screenHeight / 1080, 1)
+                frame:SetScale(nativeScale)
+                frame:ClearAllPoints()
+                frame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+            else
+                print("|cffff0000[SBPT] Не удалось определить разрешение окна игры для масштабирования Боевого пропуска.|r")
+            end
+
             if BattlePassFrameTopPanelQuestPageButton and BattlePassFrameTopPanelQuestPageButton.Click then
                 pcall(BattlePassFrameTopPanelQuestPageButton.Click, BattlePassFrameTopPanelQuestPageButton)
             end
@@ -179,7 +450,10 @@ CreateMainGUI = function()
     -- ИСПРАВЛЕНО: Жесткая привязка к стабильной helpBtn со сдвигом влево на -52 (строка гарантированно на месте!)
     local searchBox = CreateFrame("EditBox", "SirusBPSearchBox", gui)
     searchBox:SetSize(130, 20)
-    searchBox:SetPoint("TOPRIGHT", helpBtn, "TOPLEFT", -52, -1) -- Четко левее кнопки БП с красивым отступом
+    topControls:ClearAllPoints()
+    topControls:SetPoint("TOPRIGHT", gui, "TOPRIGHT", -5, -5)
+    searchBox:SetPoint("RIGHT", topControls, "LEFT", -8, 1)
+    searchBox:SetWidth(math.max(90, math.min(160, gui:GetWidth() - 335)))
     searchBox:SetAutoFocus(false)
     searchBox:SetFontObject("GameFontHighlightSmall")
     searchBox:SetTextInsets(6, 6, 0, 0)
@@ -187,8 +461,22 @@ CreateMainGUI = function()
         bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
         tile = true, tileSize = 12, edgeSize = 10, insets = { left = 2, right = 2, top = 2, bottom = 2 }
     })
-    searchBox:SetBackdropColor(0, 0, 0, 1)
+    searchBox:SetBackdropColor(0, 0, 0, 0.65)
     searchBox:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
+    titleRegion:ClearAllPoints()
+    titleRegion:SetPoint("TOPLEFT", gui, "TOPLEFT", 0, 0)
+    titleRegion:SetPoint("BOTTOMRIGHT", searchBox, "TOPLEFT", -8, -25)
+
+    local headerSeparator = gui:CreateTexture(nil, "BORDER")
+    headerSeparator:SetTexture("Interface\\Buttons\\WHITE8X8")
+    headerSeparator:SetHeight(1)
+    headerSeparator:SetPoint("TOPLEFT", gui, "TOPLEFT", 8, -32)
+    headerSeparator:SetPoint("TOPRIGHT", gui, "TOPRIGHT", -8, -32)
+    headerSeparator:SetVertexColor(0.85, 0.65, 0.25, 0.9)
+
+    local contentBottomAnchor = CreateFrame("Frame", nil, gui)
+    contentBottomAnchor:SetSize(1, 1)
+    contentBottomAnchor:SetPoint("BOTTOMRIGHT", gui, "BOTTOMRIGHT", -30, 34)
 
     local searchPrompt = searchBox:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     searchPrompt:SetPoint("LEFT", searchBox, "LEFT", 6, 0)
@@ -198,22 +486,26 @@ CreateMainGUI = function()
         if self:GetText() ~= "" then searchPrompt:Hide() else searchPrompt:Show() end
         if UpdateGUIText then UpdateGUIText() end
     end)
-    searchBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    searchBox:SetScript("OnEscapePressed", function(self)
+        self:ClearFocus()
+        gui:Hide()
+    end)
 
     -- ИСПРАВЛЕНО: Скролл-фрейм для твинков (Вкладка 1)
     local scrollFrame = CreateFrame("ScrollFrame", "SirusBPScrollFrame", gui, "UIPanelScrollFrameTemplate")
     scrollFrame:SetPoint("TOPLEFT", gui, "TOPLEFT", 10, -75)
-    scrollFrame:SetPoint("BOTTOMRIGHT", -30, 15)
+    scrollFrame:SetPoint("BOTTOMRIGHT", contentBottomAnchor, "TOPRIGHT")
 
     local scrollChild = CreateFrame("Frame", nil, scrollFrame)
     scrollChild:SetSize(460, 1)
     scrollFrame:SetScrollChild(scrollChild)
     gui.scrollChild = scrollChild
+    scrollChild:SetWidth(math.max(1, scrollFrame:GetWidth() - 20))
 
     -- ИСПРАВЛЕНО: Создаем независимый скролл-фрейм для сборов (Вкладка 2) без капризных чат-окон!
     local sborScrollFrame = CreateFrame("ScrollFrame", "SirusBPSborScrollFrame", gui, "UIPanelScrollFrameTemplate")
     sborScrollFrame:SetPoint("TOPLEFT", gui, "TOPLEFT", 10, -75)
-    sborScrollFrame:SetPoint("BOTTOMRIGHT", -30, 15)
+    sborScrollFrame:SetPoint("BOTTOMRIGHT", contentBottomAnchor, "TOPRIGHT")
 
     local sborScrollChild = CreateFrame("Frame", nil, sborScrollFrame)
         sborScrollChild:SetSize(460, 1)
@@ -256,8 +548,8 @@ CreateMainGUI = function()
     -- Инициализируем новый глобальный скролл-фрейм для холста активностей, если он еще не создан
     if not activitiesScrollFrame then
         activitiesScrollFrame = CreateFrame("ScrollFrame", "SirusBPActivitiesScrollFrame", gui, "UIPanelScrollFrameTemplate")
-        activitiesScrollFrame:SetSize(gui:GetWidth() - 40, gui:GetHeight() - 95)
         activitiesScrollFrame:SetPoint("TOPLEFT", gui, "TOPLEFT", 15, -75)
+        activitiesScrollFrame:SetPoint("BOTTOMRIGHT", contentBottomAnchor, "TOPRIGHT")
         activitiesScrollFrame:Hide() -- По умолчанию скрыт
         
         local child = CreateFrame("Frame", nil, activitiesScrollFrame)
@@ -265,6 +557,188 @@ CreateMainGUI = function()
         activitiesScrollFrame:SetScrollChild(child)
         activitiesScrollFrame.child = child
     end
+
+    local summaryFrame = CreateFrame("Frame", nil, gui)
+    summaryFrame:SetPoint("BOTTOMLEFT", gui, "BOTTOMLEFT", 30, 4)
+    summaryFrame:SetPoint("BOTTOMRIGHT", gui, "BOTTOMRIGHT", -30, 4)
+    summaryFrame:SetHeight(14)
+    gui.summaryBottomOffset = 34
+
+    local summarySeparator = gui:CreateTexture(nil, "BORDER")
+    summarySeparator:SetTexture("Interface\\Buttons\\WHITE8X8")
+    summarySeparator:SetHeight(1)
+    summarySeparator:SetPoint("BOTTOMLEFT", summaryFrame, "TOPLEFT", -20, 7)
+    summarySeparator:SetPoint("BOTTOMRIGHT", summaryFrame, "TOPRIGHT", 20, 7)
+    summarySeparator:SetVertexColor(0.85, 0.65, 0.25, 0.9)
+
+    local function UpdateCharacterSummary()
+        local currentRealm = GetRealmName()
+        local realmData = ramCacheDB and ramCacheDB[currentRealm]
+        local characters = {}
+        if realmData then
+            for name, data in pairs(realmData) do
+                if type(data) == "table" and (not SirusBPTrackerCharFilterDB or SirusBPTrackerCharFilterDB[name] ~= false) then
+                    table.insert(characters, { name = name, data = data })
+                end
+            end
+        end
+        table.sort(characters, function(a, b) return a.name < b.name end)
+
+        local availableWidth = math.max(1, summaryFrame:GetWidth())
+        local lineHeight = 16
+        local row, xOffset = 0, 0
+        local usedItems = 0
+        local now = time()
+
+        for _, character in ipairs(characters) do
+            usedItems = usedItems + 1
+            local item = characterSummaryItems[usedItems]
+            if not item then
+                item = {}
+                item.button = CreateFrame("Button", nil, summaryFrame)
+                item.name = item.button:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                item.name:SetPoint("LEFT", item.button, "LEFT", 0, 0)
+                item.name:SetJustifyH("LEFT")
+
+                item.details = summaryFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                item.separator = summaryFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+
+                for _, text in ipairs({ item.name, item.details, item.separator }) do
+                    text:SetFont("Fonts\\FRIZQT__.TTF", 9, "OUTLINE")
+                end
+                item.name:SetFont("Fonts\\FRIZQT__.TTF", 11, "OUTLINE")
+
+                item.button:SetScript("OnEnter", function(self)
+                    local data = self.summaryData
+                    if not data then return end
+                    local dailyCompleted, dailyTotal = 0, 0
+                    local seasonalCompleted, seasonalTotal = 0, 0
+                    for _, quest in pairs(data.quests or {}) do
+                        local isComplete = quest.progress == "Завершено" or quest.progress == "Завершено!"
+                        if tonumber(quest.type) == 1 then
+                            dailyTotal = dailyTotal + 1
+                            if isComplete then dailyCompleted = dailyCompleted + 1 end
+                        elseif tonumber(quest.type) == 2 then
+                            seasonalTotal = seasonalTotal + 1
+                            if isComplete then seasonalCompleted = seasonalCompleted + 1 end
+                        end
+                    end
+
+                    GameTooltip:SetOwner(self, "ANCHOR_TOP")
+                    GameTooltip:ClearLines()
+                    local classColor = CLASS_COLORS[data.class or ""] or "ffffff"
+                    local red = tonumber(string.sub(classColor, 1, 2), 16) / 255
+                    local green = tonumber(string.sub(classColor, 3, 4), 16) / 255
+                    local blue = tonumber(string.sub(classColor, 5, 6), 16) / 255
+                    GameTooltip:AddLine(self.summaryName, red, green, blue)
+                    if data.battlePassLevel then
+                        GameTooltip:AddLine(string.format("Уровень БП: %s (%s/%s)",
+                            tostring(data.battlePassLevel),
+                            tostring(data.battlePassExperience or 0),
+                            tostring(data.battlePassExperienceRequired or 0)), 0.9, 0.9, 0.9)
+                    else
+                        GameTooltip:AddLine("Уровень БП: нет данных", 0.65, 0.65, 0.65, true)
+                    end
+                    GameTooltip:AddLine(string.format("Ежедневные задания %d/%d", dailyCompleted, dailyTotal), 0.9, 0.9, 0.9, true)
+                    GameTooltip:AddLine(string.format("Сезонные задания %d/%d", seasonalCompleted, seasonalTotal), 0.9, 0.9, 0.9, true)
+                    local dailyMayBeNew, seasonalMayBeNew = GetCharacterResetWarnings(data, time())
+                    if dailyMayBeNew or seasonalMayBeNew then
+                        local warning
+                        if dailyMayBeNew and seasonalMayBeNew then
+                            warning = "Возможны новые задания: ежедневные и сезонные."
+                        elseif dailyMayBeNew then
+                            warning = "Возможно новое ежедневное задание."
+                        else
+                            warning = "Возможно новое сезонное задание."
+                        end
+                        GameTooltip:AddLine(warning, 1, 0.82, 0, true)
+                    end
+                    GameTooltip:Show()
+                end)
+                item.button:SetScript("OnLeave", function() GameTooltip:Hide() end)
+                characterSummaryItems[usedItems] = item
+            end
+
+            local data = character.data
+            local dailyCompleted, seasonalCompleted = 0, 0
+            for _, quest in pairs(data.quests or {}) do
+                if quest.progress == "Завершено" or quest.progress == "Завершено!" then
+                    if tonumber(quest.type) == 1 then dailyCompleted = dailyCompleted + 1
+                    elseif tonumber(quest.type) == 2 then seasonalCompleted = seasonalCompleted + 1 end
+                end
+            end
+
+            local classColor = CLASS_COLORS[data.class or ""] or "ffffff"
+            local red = tonumber(string.sub(classColor, 1, 2), 16) / 255
+            local green = tonumber(string.sub(classColor, 3, 4), 16) / 255
+            local blue = tonumber(string.sub(classColor, 5, 6), 16) / 255
+            item.classColor = { red, green, blue }
+            item.name:SetText(character.name)
+            item.button.summaryName = character.name
+            item.button.summaryData = data
+
+            local level = data.battlePassLevel and tostring(data.battlePassLevel) or "?"
+            item.details:SetText(string.format("%s/%d", level, seasonalCompleted))
+            item.separator:SetText("  |  ")
+
+            local itemWidth = item.name:GetStringWidth() + item.details:GetStringWidth()
+            local separatorWidth = usedItems > 1 and item.separator:GetStringWidth() or 0
+            if xOffset > 0 and xOffset + separatorWidth + itemWidth > availableWidth then
+                row = row + 1
+                xOffset = 0
+                separatorWidth = 0
+            end
+
+            if separatorWidth > 0 then
+                item.separator:ClearAllPoints()
+                item.separator:SetPoint("BOTTOMLEFT", summaryFrame, "TOPLEFT", xOffset, -(row + 1) * lineHeight + 4)
+                item.separator:SetTextColor(0.55, 0.55, 0.55, 1)
+                item.separator:Show()
+                xOffset = xOffset + separatorWidth
+            else
+                item.separator:Hide()
+            end
+
+            item.button:ClearAllPoints()
+            item.button:SetPoint("TOPLEFT", summaryFrame, "TOPLEFT", xOffset, -row * lineHeight + 4)
+            item.button:SetSize(item.name:GetStringWidth() + 1, lineHeight)
+            item.name:ClearAllPoints()
+            item.name:SetPoint("BOTTOMLEFT", item.button, "BOTTOMLEFT", 0, 0)
+            xOffset = xOffset + item.name:GetStringWidth() + 2
+
+            item.details:ClearAllPoints()
+            item.details:SetPoint("BOTTOMLEFT", summaryFrame, "TOPLEFT", xOffset, -(row + 1) * lineHeight + 4)
+            item.details:SetTextColor(0.85, 0.85, 0.85, 1)
+            xOffset = xOffset + item.details:GetStringWidth()
+            xOffset = xOffset + 10
+
+            local dailyMayBeNew, seasonalMayBeNew = GetCharacterResetWarnings(data, now)
+            item.warning = dailyMayBeNew or seasonalMayBeNew
+            local alpha = item.warning and characterSummaryAlpha or 1
+            if item.warning and alpha < 1 then item.name:SetTextColor(0.65, 0.65, 0.65, 1)
+            else item.name:SetTextColor(red, green, blue, 1) end
+            item.button:Show()
+            item.details:Show()
+        end
+
+        for index = usedItems + 1, #characterSummaryItems do
+            local item = characterSummaryItems[index]
+            item.button:Hide()
+            item.details:Hide()
+            item.separator:Hide()
+        end
+
+        local lineCount = characters and #characters > 0 and row + 1 or 1
+        summaryFrame:SetHeight(lineCount * lineHeight)
+        local bottomOffset = summaryFrame:GetHeight() + 20
+        gui.summaryBottomOffset = bottomOffset
+        contentBottomAnchor:ClearAllPoints()
+        contentBottomAnchor:SetPoint("BOTTOMRIGHT", gui, "BOTTOMRIGHT", -30, bottomOffset)
+        summarySeparator:ClearAllPoints()
+        summarySeparator:SetPoint("BOTTOMLEFT", summaryFrame, "TOPLEFT", -20, 7)
+        summarySeparator:SetPoint("BOTTOMRIGHT", summaryFrame, "TOPRIGHT", 20, 7)
+    end
+    gui.UpdateCharacterSummary = UpdateCharacterSummary
 
     gui.myTabs = {}
     local function SwitchTab(id)
@@ -291,17 +765,7 @@ CreateMainGUI = function()
 
         -- Красивое неоновое переключение цветов для активной и неактивной вкладок
         for tID, btn in ipairs(gui.myTabs) do
-            if tID == id then
-                -- АКТИВНАЯ ВКЛАДКА: Стильный темно-синий цвет
-                btn:SetBackdropColor(0.12, 0.22, 0.34, 0.95)
-                btn:SetBackdropBorderColor(0, 0.6, 0.9, 1) -- Голубое неоновое свечение
-                btn.text:SetTextColor(1, 0.82, 0) -- Золотистый яркий текст
-            else
-                -- НЕАКТИВНАЯ ВКЛАДКА: Прозрачно-угольный цвет в тон главного фрейма
-                btn:SetBackdropColor(0.05, 0.05, 0.05, 0.85)
-                btn:SetBackdropBorderColor(0.2, 0.2, 0.2, 1) -- Тусклая серая рамка
-                btn.text:SetTextColor(0.5, 0.5, 0.5) -- Приглушенный серый текст
-            end
+            SetBlueTabStyle(btn, tID == id)
         end
 		--sbpt-v589: ТОЧЕЧНЫЙ СБРОС АЛЬФЫ ВСЕХ ВКЛАДОК ПРИ ПЕРЕКЛЮЧЕНИИ
         for _, btn in ipairs(gui.myTabs) do if btn and btn.SetAlpha then btn:SetAlpha(1) end end
@@ -316,15 +780,13 @@ CreateMainGUI = function()
     -- РАСШИРЯЕМ МАССИВ НАИМЕНОВАНИЙ ВКЛАДКИ ДО ТРЕХ
     local tabNames = { "Квесты персонажей", "Актуальные сборы", "Активности" }
     for i = 1, 3 do
+        local tabIndex = i
         local tab = CreateFrame("Button", nil, gui)
         tab:SetSize(140, 22)
-        tab:SetBackdrop({
-            bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-            tile = true, tileSize = 10, edgeSize = 10, insets = { left = 2, right = 2, top = 2, bottom = 2 }
-        })
+        SetBlueTabStyle(tab, false)
         
         if i == 1 then
-            tab:SetPoint("TOPLEFT", gui, "TOPLEFT", 15, -45)
+            tab:SetPoint("TOPLEFT", gui, "TOP", -215, -45)
         else
             tab:SetPoint("LEFT", gui.myTabs[i-1], "RIGHT", 5, 0)
         end
@@ -332,25 +794,22 @@ CreateMainGUI = function()
         tab.text = tab:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         tab.text:SetPoint("CENTER", 0, 0)
         tab.text:SetText(tabNames[i])
+        SetBlueTabStyle(tab, false)
 
         -- ИСПРАВЛЕНО: Полностью восстановлено красивое неоново-синее свечение при наведении мыши!
         tab:SetScript("OnEnter", function(self)
-            if SirusBPTrackerConfig.ActiveTab ~= i then
-                self:SetBackdropColor(0.08, 0.15, 0.25, 0.9) -- Мягкий синеватый фон
-                self:SetBackdropBorderColor(0, 0.6, 0.9, 1)  -- Голубое неоновое свечение границ
-                self.text:SetTextColor(0.9, 0.9, 0.9)
+            if SirusBPTrackerConfig.ActiveTab ~= tabIndex then
+                self:SetBackdropColor(0.11, 0.28, 0.46, 1)
             end
         end)
         tab:SetScript("OnLeave", function(self)
-            if SirusBPTrackerConfig.ActiveTab ~= i then
-                self:SetBackdropColor(0.05, 0.05, 0.05, 0.85)
-                self.text:SetTextColor(0.5, 0.5, 0.5)
-                self:SetBackdropBorderColor(0.2, 0.2, 0.2, 1) -- Возвращаем тусклую серую рамку
+            if SirusBPTrackerConfig.ActiveTab ~= tabIndex then
+                SetBlueTabStyle(self, false)
             end
         end)
 
-        tab:SetScript("OnClick", function() SwitchTab(i) end)
-        gui.myTabs[i] = tab
+        tab:SetScript("OnClick", function() SwitchTab(tabIndex) end)
+        gui.myTabs[tabIndex] = tab
     end
 
     -- СОЗДАЕМ ВТОРОЙ РЯД СУБ-ВКЛАДОК ДЛЯ ПЕРВОЙ ВКЛАДКИ (Все / Ежедневные / Сезонные)
@@ -362,19 +821,7 @@ CreateMainGUI = function()
         
         -- Управляем цветами и неоновым свечением суб-вкладок БП
         for sID, sBtn in ipairs(gui.mySubTabs) do
-            if sID == subID then
-                --sBtn:SetBackdropColor(0.12, 0.22, 0.34, 0.95)
-                --sBtn:SetBackdropBorderColor(0, 0.6, 0.9, 1) -- Синий неон на активной суб-вкладке
-                --sBtn.text:SetTextColor(1, 0.82, 0)
-				-- АКТИВНАЯ СУБ-ВКЛАДКА: Стильный изумрудно-матовый цвет
-                sBtn:SetBackdropColor(0.08, 0.24, 0.14, 0.95)
-                sBtn:SetBackdropBorderColor(0, 0.8, 0.4, 1) -- Зеленое неоновое свечение границ
-                sBtn.text:SetTextColor(0, 1, 0.5) -- Сочный салатовый текст
-            else
-                sBtn:SetBackdropColor(0.03, 0.03, 0.03, 0.85)
-                sBtn:SetBackdropBorderColor(0.15, 0.15, 0.15, 1)
-                sBtn.text:SetTextColor(0.45, 0.45, 0.45)
-            end
+            SetBlueTabStyle(sBtn, sID == subID)
         end
         if UpdateGUIText then UpdateGUIText() end
     end
@@ -386,17 +833,7 @@ CreateMainGUI = function()
         
         -- Мягкое благородное переключение цветов суб-панели
         for sID, sBtn in ipairs(gui.mySubTabs) do
-            if sID == subID then
-                -- АКТИВНАЯ СУБ-ВКЛАДКА: Приглушенный серо-синий джинсовый тон
-                sBtn:SetBackdropColor(0.15, 0.20, 0.28, 0.95)
-                sBtn:SetBackdropBorderColor(0.3, 0.5, 0.7, 0.8) -- Мягкая стальная рамка
-                sBtn.text:SetTextColor(1, 0.82, 0) -- Классический золотой текст
-            else
-                -- НЕАКТИВНАЯ СУБ-ВКЛАДКА: Прозрачно-угольный тон в цвет главного фрейма
-                sBtn:SetBackdropColor(0.04, 0.04, 0.04, 0.85)
-                sBtn:SetBackdropBorderColor(0.18, 0.18, 0.18, 1)
-                sBtn.text:SetTextColor(0.45, 0.45, 0.45)
-            end
+            SetBlueTabStyle(sBtn, sID == subID)
         end
         if UpdateGUIText then UpdateGUIText() end
     end
@@ -404,15 +841,13 @@ CreateMainGUI = function()
 
     local subTabNames = { "Все задания", "Ежедневные", "Сезонные" }
     for i = 1, 3 do
+        local tabIndex = i
         local subTab = CreateFrame("Button", nil, gui)
         subTab:SetSize(140, 20)
-        subTab:SetBackdrop({
-            bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-            tile = true, tileSize = 8, edgeSize = 8, insets = { left = 2, right = 2, top = 2, bottom = 2 }
-        })
+        SetBlueTabStyle(subTab, false)
         
         if i == 1 then
-            subTab:SetPoint("TOPLEFT", gui, "TOPLEFT", 15, -70)
+            subTab:SetPoint("TOPLEFT", gui, "TOP", -215, -70)
         else
             subTab:SetPoint("LEFT", gui.mySubTabs[i-1], "RIGHT", 5, 0)
         end
@@ -420,25 +855,22 @@ CreateMainGUI = function()
         subTab.text = subTab:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         subTab.text:SetPoint("CENTER", 0, 0)
         subTab.text:SetText(subTabNames[i])
+        SetBlueTabStyle(subTab, false)
 
         -- МЯГКИЙ ХОВЕР ПРИ НАВЕДЕНИИ МЫШИ (БЕЗ ЯРКОГО СВЕЧЕНИЯ)
         subTab:SetScript("OnEnter", function(self)
-            if SirusBPTrackerConfig.ActiveSubTab ~= i then
-                self:SetBackdropColor(0.10, 0.14, 0.20, 0.9)
-                self:SetBackdropBorderColor(0.25, 0.4, 0.55, 0.8)
-                self.text:SetTextColor(0.75, 0.75, 0.75)
+            if SirusBPTrackerConfig.ActiveSubTab ~= tabIndex then
+                self:SetBackdropColor(0.11, 0.28, 0.46, 1)
             end
         end)
         subTab:SetScript("OnLeave", function(self)
-            if SirusBPTrackerConfig.ActiveSubTab ~= i then
-                self:SetBackdropColor(0.03, 0.03, 0.03, 0.85)
-                self.text:SetTextColor(0.45, 0.45, 0.45)
-                self:SetBackdropBorderColor(0.15, 0.15, 0.15, 1)
+            if SirusBPTrackerConfig.ActiveSubTab ~= tabIndex then
+                SetBlueTabStyle(self, false)
             end
         end)
 
-        subTab:SetScript("OnClick", function() SwitchSubTab(i) end)
-        gui.mySubTabs[i] = subTab
+        subTab:SetScript("OnClick", function() SwitchSubTab(tabIndex) end)
+        gui.mySubTabs[tabIndex] = subTab
     end
 
 
@@ -458,7 +890,14 @@ CreateMainGUI = function()
             SwitchSubTab(savedSub)
             
             -- Сдвигаем основной скролл-контейнер первой вкладки чуть ниже (на -96), чтобы освободить место
-            if scrollFrame then scrollFrame:SetPoint("TOPLEFT", gui, "TOPLEFT", 12, -96) end
+            if scrollFrame then
+                scrollFrame:ClearAllPoints()
+                scrollFrame:SetPoint("TOPLEFT", gui, "TOPLEFT", 12, -96)
+                scrollFrame:SetPoint("BOTTOMRIGHT", contentBottomAnchor, "TOPRIGHT")
+                if gui.scrollChild then
+                    gui.scrollChild:SetWidth(math.max(1, scrollFrame:GetWidth() - 20))
+                end
+            end
         else
             -- Если ушли на Сборы или Активности - намертво гасим суб-вкладки с экрана
             for _, sBtn in ipairs(gui.mySubTabs) do sBtn:Hide() end
@@ -467,8 +906,79 @@ CreateMainGUI = function()
 
     gui:SetScript("OnShow", function()
         if not SirusBPTrackerConfig then SirusBPTrackerConfig = {} end
+        UpdateAddonEscapeFrame()
         local savedTab = SirusBPTrackerConfig.ActiveTab or 1
         SwitchTab(savedTab)
+    end)
+
+    local function CreateResizeHandle(point, xOffset, yOffset, sizingPoint, isLeft)
+        local handle = CreateFrame("Button", nil, gui)
+        handle:SetSize(20, 20)
+        handle:SetPoint(point, gui, point, xOffset, yOffset)
+        handle:SetFrameLevel(gui:GetFrameLevel() + 5)
+
+        for i = 1, 3 do
+            local stripe = handle:CreateTexture(nil, "OVERLAY")
+            stripe:SetTexture("Interface\\Buttons\\WHITE8X8")
+            stripe:SetSize(10, 2)
+            stripe:SetVertexColor(0.75, 0.75, 0.75, 0.75)
+            stripe:SetRotation(math.pi / 4)
+            if isLeft then
+                stripe:SetPoint("BOTTOMLEFT", handle, "BOTTOMLEFT", 3 + (i - 1) * 4, 3 + (i - 1) * 4)
+            else
+                stripe:SetPoint("BOTTOMRIGHT", handle, "BOTTOMRIGHT", -3 - (i - 1) * 4, 3 + (i - 1) * 4)
+            end
+        end
+
+        handle:SetScript("OnMouseDown", function(_, button)
+            if button == "LeftButton" then gui:StartSizing(sizingPoint) end
+        end)
+        handle:SetScript("OnMouseUp", function()
+            gui:StopMovingOrSizing()
+        end)
+        handle:SetScript("OnEnter", function(self)
+            for i = 1, self:GetNumRegions() do
+                local region = select(i, self:GetRegions())
+                if region and region.SetVertexColor then region:SetVertexColor(1, 1, 1, 1) end
+            end
+        end)
+        handle:SetScript("OnLeave", function(self)
+            for i = 1, self:GetNumRegions() do
+                local region = select(i, self:GetRegions())
+                if region and region.SetVertexColor then region:SetVertexColor(0.75, 0.75, 0.75, 0.75) end
+            end
+        end)
+    end
+
+    CreateResizeHandle("BOTTOMLEFT", 4, 4, "BOTTOMLEFT", true)
+    CreateResizeHandle("BOTTOMRIGHT", -4, 4, "BOTTOMRIGHT", false)
+
+    gui:SetScript("OnSizeChanged", function(self, width, height)
+        SirusBPTrackerConfig.MainFrameWidth = width
+        SirusBPTrackerConfig.MainFrameHeight = height
+
+        if self.scrollChild and scrollFrame then
+            self.scrollChild:SetWidth(math.max(1, scrollFrame:GetWidth() - 20))
+        end
+        if searchBox then searchBox:SetWidth(math.max(90, math.min(160, width - 335))) end
+        if activitiesScrollFrame and activitiesScrollFrame.child then
+            activitiesScrollFrame.child:SetWidth(math.max(1, activitiesScrollFrame:GetWidth()))
+        end
+
+        self.resizeElapsed = 0
+        self:SetScript("OnUpdate", function(frame, elapsed)
+            frame.resizeElapsed = frame.resizeElapsed + elapsed
+            if frame.resizeElapsed >= 0.15 then
+                frame:SetScript("OnUpdate", nil)
+                if self.scrollChild and scrollFrame then
+                    self.scrollChild:SetWidth(math.max(1, scrollFrame:GetWidth() - 20))
+                end
+                if UpdateGUIText then UpdateGUIText() end
+                if DrawActivitiesTab and activitiesScrollFrame and activitiesScrollFrame:IsShown() then
+                    DrawActivitiesTab()
+                end
+            end
+        end)
     end)
 
     gui:Hide()
@@ -489,7 +999,9 @@ local function AcquireFontString(parent, font, r, g, b, justify, width, indent, 
     end
     fs:ClearAllPoints()
     
-    fs:SetFont("Fonts\\FRIZQT__.TTF", (font == "GameFontNormalLarge" and 13 or 11), "OUTLINE")
+    local fontSize = GetMainFontSize()
+    if font == "GameFontNormalLarge" then fontSize = fontSize + 2 end
+    fs:SetFont("Fonts\\FRIZQT__.TTF", fontSize, "OUTLINE")
     fs:SetPoint("TOPLEFT", indent or 10, yOffset)
     fs:SetWidth(width or 440)
     fs:SetJustifyH(justify or "LEFT")
@@ -512,7 +1024,13 @@ end
 
 --sbpt-v172: ПОЛНЫЙ МОНОЛИТ UI С ОБНОВЛЕНИЕМ НА ЛЕТУ И ПОИСКОМ ТВИНКОВ СТРОГО ПО ID КВЕСТОВ
 UpdateGUIText = function()
+    newQuestTagLabels = {}
+    newQuestTagPulseElapsed = 0
+    newQuestTagPulseAlpha = 1
+    newQuestTagPulse:Hide()
+
     local gui = CreateMainGUI()
+    if gui.UpdateCharacterSummary then gui.UpdateCharacterSummary() end
     local child = gui.scrollChild
     local sborChild = gui.sborScrollChild
     ClearFontStringPool()
@@ -637,23 +1155,44 @@ UpdateGUIText = function()
                 twinsLine = "|cff888888[|r" .. table.concat(charProgressStrings, ", ") .. "|cff888888] |r"
             end
 
-            local sborLine = sborChild:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            local rowWidth = math.max(1, gui.sborScrollFrame:GetWidth() - 35)
+            local sborRow = CreateFrame("Frame", nil, sborChild)
+            sborRow:SetWidth(rowWidth)
+            sborRow:SetPoint("TOPLEFT", sborChild, "TOPLEFT", 15, yOffset)
+
+            local timeText = sborRow:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            timeText:SetFont("Fonts\\FRIZQT__.TTF", GetMainFontSize(), "OUTLINE")
+            timeText:SetWidth(105)
+            timeText:SetJustifyH("RIGHT")
+            timeText:SetPoint("TOPLEFT", sborRow, "TOPLEFT", 0, 0)
+            timeText:SetTextColor(0.65, 0.65, 0.65)
+            timeText:SetText("(" .. timeStr .. ")")
+
+            local sborLine = sborRow:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            sborLine:SetFont("Fonts\\FRIZQT__.TTF", GetMainFontSize(), "OUTLINE")
             sborLine:SetTextColor(1, 1, 1)
-            sborLine:SetPoint("TOPLEFT", sborChild, "TOPLEFT", 15, yOffset)
-            sborLine:SetWidth(440)
+            sborLine:SetPoint("TOPLEFT", sborRow, "TOPLEFT", 120, 0)
+            sborLine:SetWidth(math.max(1, rowWidth - 120))
             sborLine:SetJustifyH("LEFT")
             sborLine:SetNonSpaceWrap(true)
-            
-            -- ВЫВОД НА ЭКРАН: Ставим цветные буквы [М, М] строго ПЕРЕД красивым описанием задания
-            sborLine:SetText(string.format("|cff888888(%s)|r %s|cff%s[%s]|r |cff%s[%s]|r: |cffffffff\"%s\"|r", 
-                timeStr, twinsLine, hexColor, questFullName, classHex, auth.name, cleanMsg))
+            sborLine:SetText(string.format("%s|cff%s[%s]|r |cff%s[%s]|r: |cffffffff\"%s\"|r",
+                twinsLine, hexColor, questFullName, classHex, auth.name, cleanMsg))
 
-            local rowBtn = CreateFrame("Button", "SirusBPSborRowBtn_" .. sborBtnIdx, sborChild)
-            rowBtn:SetPoint("TOPLEFT", sborLine, "TOPLEFT", 0, 0)
-            rowBtn:SetPoint("BOTTOMRIGHT", sborLine, "BOTTOMRIGHT", 0, 0)
+            local rowHeight = math.max(18, math.floor(sborLine:GetStringHeight() + 4))
+            sborRow:SetHeight(rowHeight)
+
+            local separator = sborRow:CreateTexture(nil, "BACKGROUND")
+            separator:SetSize(rowWidth - 25, 1)
+            separator:SetPoint("BOTTOMLEFT", sborRow, "BOTTOMLEFT", 15, 0)
+            separator:SetTexture("Interface\\Buttons\\WHITE8X8")
+            separator:SetVertexColor(0.4, 0.4, 0.4, 0.45)
+
+            local rowBtn = CreateFrame("Button", "SirusBPSborRowBtn_" .. sborBtnIdx, sborRow)
+            rowBtn:SetAllPoints(sborRow)
             rowBtn:RegisterForClicks("LeftButtonUp")
             rowBtn.questName = questFullName
             rowBtn.authorName = auth.name
+            rowBtn.questID = targetQuestID
             sborBtnIdx = sborBtnIdx + 1
 
             rowBtn:SetScript("OnClick", function(self)
@@ -743,8 +1282,10 @@ UpdateGUIText = function()
                 GameTooltip:Hide()
             end)
 
-            yOffset = yOffset - (sborLine:GetStringHeight() + 8)
+            yOffset = yOffset - (rowHeight + 8)
+            table.insert(sborChild.widgets, sborRow)
             table.insert(sborChild.widgets, sborLine)
+            table.insert(sborChild.widgets, timeText)
             table.insert(sborChild.widgets, rowBtn)
         end
         sborChild:SetHeight(math.abs(yOffset) + 20)
@@ -831,7 +1372,7 @@ UpdateGUIText = function()
                     
                     if activeSub == 1 then
                         -- Выводим чистое текстовое название без лишних знаков "==="
-                        local catFs = AcquireFontString(child, "GameFontNormalLarge", 0, 1, 1, "LEFT", 420, 10, yOffset)
+                        local catFs = AcquireFontString(child, "GameFontNormalLarge", 0, 1, 1, "LEFT", child:GetWidth() - 20, 10, yOffset)
                         catFs:SetText(catName)
                         table.insert(child.widgets, catFs)
                         
@@ -854,7 +1395,22 @@ UpdateGUIText = function()
 
 --sbpt-v461 [ФРАГМЕНТ 1 ИЗ 2]: ИСКЛЮЧИТЕЛЬНО ЧИСЛОВОЙ ФИЛЬТР Q.TYPE И СИММЕТРИЧНЫЕ ОТСТУПЫ ОКНА
                     if questList then
+                        local sortedQuestEntries = {}
                         for questText, characters in pairs(questList) do
+                            table.insert(sortedQuestEntries, {
+                                text = questText,
+                                characters = characters,
+                                isNew = IsNewTrackedQuest(currentRealm, characters)
+                            })
+                        end
+                        table.sort(sortedQuestEntries, function(a, b)
+                            if a.isNew ~= b.isNew then return a.isNew end
+                            return a.text < b.text
+                        end)
+
+                        for _, questEntry in ipairs(sortedQuestEntries) do
+                            local questText = questEntry.text
+                            local characters = questEntry.characters
                             if searchText == "" or string.find(string.lower(questText), searchText, 1, true) then
                                 
                                 -- 1. СТРОГИЙ ЧИСЛОВОЙ СУБ-ФИЛЬТР (1 - Ежедневное, 2 - Сезонное)
@@ -875,29 +1431,54 @@ UpdateGUIText = function()
                                 
                                 if isAllowed then
                                     local tempFs = child:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-                                    tempFs:SetWidth(child:GetWidth() - 25)
-                                    tempFs:SetText("• " .. questText)
+                                    tempFs:SetFont("Fonts\\FRIZQT__.TTF", GetMainFontSize() + 1, "OUTLINE")
+                                    local titleWidth = child:GetWidth() - 45
+                                    if questEntry.isNew then
+                                        tempFs:SetText("New")
+                                        titleWidth = titleWidth - tempFs:GetStringWidth() - 5
+                                        tempFs:SetWidth(math.max(1, titleWidth))
+                                        tempFs:SetText(questText)
+                                    else
+                                        tempFs:SetWidth(titleWidth)
+                                        tempFs:SetText("• " .. questText)
+                                    end
                                     local questTextHeight = math.floor(tempFs:GetStringHeight() + 0.5)
                                     tempFs:Hide()
                                     
                                     local numChars = #characters
-                                    local numRows = math.ceil(numChars / 2)
-                                    local rowFrameHeight = questTextHeight + 12 + (numRows * 15)
+                                    local rowWidth = child:GetWidth() - 10
+                                    local progressAreaWidth = math.max(1, rowWidth - 30)
+                                    local progressColumns = math.max(1, math.floor((progressAreaWidth + PROGRESS_COLUMN_GAP) / (PROGRESS_COLUMN_MIN_WIDTH + PROGRESS_COLUMN_GAP)))
+                                    local characterLineHeight = math.max(15, GetMainFontSize() + 4)
+                                    local progressBarHeight = math.max(11, GetMainFontSize() + 1)
+                                    local numRows = math.ceil(numChars / progressColumns)
+                                    local rowFrameHeight = questTextHeight + 12 + (numRows * characterLineHeight)
                                     
                                     local row = CreateFrame("Frame", nil, child)
-                                    row:SetSize(child:GetWidth() - 10, rowFrameHeight)
+                                    row:SetSize(rowWidth, rowFrameHeight)
                                     row:SetPoint("TOPLEFT", child, "TOPLEFT", 5, yOffset)
                                     table.insert(child.widgets, row)
                                     
                                     local qFs = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-                                    qFs:SetPoint("TOPLEFT", row, "TOPLEFT", 15, -2)
-                                    qFs:SetWidth(child:GetWidth() - 35)
+                                    local questTitleLeft = 15
+                                    if questEntry.isNew then
+                                        local newLabel = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                                        newLabel:SetFont("Fonts\\FRIZQT__.TTF", math.max(8, GetMainFontSize() - 3), "OUTLINE")
+                                        newLabel:SetPoint("TOPLEFT", row, "TOPLEFT", questTitleLeft, -2)
+                                        newLabel:SetText("New")
+                                        newLabel:SetTextColor(0, 1, 0)
+                                        table.insert(newQuestTagLabels, newLabel)
+                                        questTitleLeft = questTitleLeft + math.floor(newLabel:GetStringWidth() + 5)
+                                    end
+                                    qFs:SetPoint("TOPLEFT", row, "TOPLEFT", questTitleLeft, -2)
+                                    qFs:SetWidth(questEntry.isNew and (rowWidth - questTitleLeft - 20) or (rowWidth - 35))
                                     qFs:SetJustifyH("LEFT")
-                                    qFs:SetText("• " .. questText)
+                                    qFs:SetFont("Fonts\\FRIZQT__.TTF", GetMainFontSize() + 1, "OUTLINE")
+                                    qFs:SetText((questEntry.isNew and "" or "• ") .. questText)
                                     qFs:SetTextColor(1, 0.82, 0, 1)
                                     
                                     local questClickBtn = CreateFrame("Button", nil, row)
-                                    questClickBtn:SetPoint("TOPLEFT", qFs, "TOPLEFT", -5, 2)
+                                    questClickBtn:SetPoint("TOPLEFT", row, "TOPLEFT", 10, 0)
                                     questClickBtn:SetPoint("BOTTOMRIGHT", qFs, "BOTTOMRIGHT", 5, -2)
                                     questClickBtn:RegisterForClicks("LeftButtonUp")
                                     
@@ -907,7 +1488,6 @@ UpdateGUIText = function()
                                     
                                     table.sort(characters, function(a, b) return a.name < b.name end)
                                     
-                                    local charYOffset = -(questTextHeight + 6)
                                     local exactQuestID = nil
                                     local currentOnlineCharProgress = "0/0"
                                     local activePlayerName = UnitName("player")
@@ -935,25 +1515,31 @@ UpdateGUIText = function()
                                             if singleNum then curProgress = singleNum maxProgress = singleNum > 1 and singleNum or 1 end
                                         end
                                         
-                                        -- ИДЕАЛЬНО ЗЕРКАЛЬНАЯ СЕТКА: Поля по 15 пикселей с обоих краев
-                                        local isEven = (charIdx % 2 == 0)
-                                        local charXOffset = isEven and 235 or 15
-                                        local barXOffset = isEven and 355 or 135
+                                        local progressColumn = (charIdx - 1) % progressColumns
+                                        local progressRow = math.floor((charIdx - 1) / progressColumns)
+                                        local progressCellWidth = (progressAreaWidth - (progressColumns - 1) * PROGRESS_COLUMN_GAP) / progressColumns
+                                        local charXOffset = 15 + progressColumn * (progressCellWidth + PROGRESS_COLUMN_GAP)
+                                        local charYOffset = -(questTextHeight + 6) - progressRow * characterLineHeight
+                                        local charWidth = math.max(60, math.min(100, progressCellWidth * 0.45))
+                                        local barWidth = math.max(65, math.min(125, progressCellWidth - charWidth - 10))
+                                        local barXOffset = charXOffset + charWidth + 8
                                         
                                         local charFs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
                                         charFs:SetPoint("TOPLEFT", row, "TOPLEFT", charXOffset, charYOffset)
-                                        charFs:SetWidth(95)
+                                        charFs:SetWidth(charWidth)
                                         charFs:SetJustifyH("LEFT")
+                                        charFs:SetFont("Fonts\\FRIZQT__.TTF", GetMainFontSize(), "OUTLINE")
                                         charFs:SetText(string.format(" |cff%s%s|r", hexColor, char.name))
                                         table.insert(child.widgets, charFs)
 --sbpt-v461 [ФРАГМЕНТ 2 ИЗ 2]: ЦЕНТРОВКА ЦИФР, КРУПНЫЙ ТЕКСТ ЗАВЕРШЕНО И ФИНАЛИЗАЦИЯ ВКЛАДКИ 1
                                         if currentProgressText == "Завершено" or currentProgressText == "Завершено!" or curProgress >= maxProgress then
                                             local doneContainer = CreateFrame("Frame", nil, row)
-                                            doneContainer:SetSize(80, 11)
+                                            doneContainer:SetSize(barWidth, progressBarHeight)
                                             doneContainer:SetPoint("TOPLEFT", row, "TOPLEFT", barXOffset, charYOffset - 1)
                                             
                                             local doneFs = doneContainer:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
                                             doneFs:SetPoint("CENTER", doneContainer, "CENTER", 0, -1)
+                                            doneFs:SetFont("Fonts\\FRIZQT__.TTF", math.max(7, GetMainFontSize() - 2), "OUTLINE")
                                             doneFs:SetTextColor(0, 1, 0)
                                             doneFs:SetText("Завершено")
                                             
@@ -961,7 +1547,7 @@ UpdateGUIText = function()
                                             table.insert(child.widgets, doneFs)
                                         else
                                             local bar = CreateFrame("StatusBar", nil, row)
-                                            bar:SetSize(80, 11)
+                                            bar:SetSize(barWidth, progressBarHeight)
                                             bar:SetPoint("TOPLEFT", row, "TOPLEFT", barXOffset, charYOffset - 1)
                                             bar:SetMinMaxValues(0, maxProgress)
                                             bar:SetValue(curProgress)
@@ -973,7 +1559,8 @@ UpdateGUIText = function()
                                             
                                             local barTex = bar:CreateTexture(nil, "ARTWORK")
                                             barTex:SetTexture("Interface\\Buttons\\WHITE8X8")
-                                            barTex:SetVertexColor(0.0, 0.5, 0.6, 0.75)
+                                            local progressR, progressG, progressB = GetProgressBarColor()
+                                            barTex:SetVertexColor(progressR, progressG, progressB, 0.85)
                                             bar:SetStatusBarTexture(barTex)
                                             
 											--[[
@@ -983,22 +1570,14 @@ UpdateGUIText = function()
 											--sbpt-v465: ПОЛНАЯ ИЗОЛЯЦИЯ ШРИФТА ЦИФР БАРА ДЛЯ ИСКЛЮЧЕНИЯ УМЕНЬШЕНИЯ ЧАТА ELVUI
                                             -- Передаем явный шаблон "GameFontHighlightSmall" вместо nil для приватности фрейма
                                             local barText = bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-                                            barText:SetFont("Fonts\\FRIZQT__.TTF", 9.5, "THICKOUTLINE")
+                                            barText:SetFont("Fonts\\FRIZQT__.TTF", math.max(7, GetMainFontSize() - 2), "THICKOUTLINE")
 
-											barText:SetPoint("CENTER", bar, "CENTER", 0, -2)
+											barText:SetPoint("CENTER", bar, "CENTER", 0, -1)
                                             barText:SetTextColor(1, 1, 1)
                                             barText:SetText(currentProgressText)
                                             
                                             table.insert(child.widgets, bar)
                                         end
-                                        
-                                        if isEven then
-                                            charYOffset = charYOffset - 15
-                                        end
-                                    end
-                                    
-                                    if numChars % 2 ~= 0 then
-                                        charYOffset = charYOffset - 15
                                     end
 
                                     local capturedQuestID = exactQuestID or 28113
@@ -1013,7 +1592,8 @@ UpdateGUIText = function()
                                         end
                                         
                                         local finalChannel = (channelNum and channelNum > 0) and channelNum or 4
-                                        ChatFrame_OpenChat("/" .. finalChannel .. " ", DEFAULT_CHAT_FRAME)
+                                        local channelCommand = "/" .. finalChannel .. " "
+                                        ChatFrame_OpenChat(channelCommand, DEFAULT_CHAT_FRAME)
                                         
                                         local l_capturedQuestID = exactQuestID or 28113
                                         local l_capturedQuestText = questText or "Задание БП"
@@ -1025,23 +1605,22 @@ UpdateGUIText = function()
                                             if frameElapsed >= 0.02 then
                                                 self:SetScript("OnUpdate", nil)
                                                 
-                                                local editBox = ChatEdit_GetActiveWindow and ChatEdit_GetActiveWindow() or LAST_ACTIVE_CHAT_EDIT_BOX or (DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.editBox)
+                                                local editBox = DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.editBox
                                                 if editBox then
                                                     editBox:Show()
                                                     editBox:SetFocus()
                                                     
                                                     local finalShortTitle = tostring(l_capturedQuestText)
                                                     local sirusTypeParam = 83
-                                                    if string.find(string.lower(finalShortTitle), "ежедневное") then 
-                                                        sirusTypeParam = 82 
+                                                    if string.find(string.lower(finalShortTitle), "ежедневное") then
+                                                        sirusTypeParam = 82
                                                     end
-                                                    
-                                                    -- ВОССТАНОВЛЕНО: Побайтово точный оригинальный хэш Сируса с ведущим пробелом
                                                     local colorHex = "ffff8040"
-                                                    local officialSirusLink = string.format(" |c%s|Hquest:%d:%d|h[%s]|h|r", 
+                                                    local officialSirusLink = string.format("|c%s|Hquest:%d:%d|h[%s]|h|r",
                                                         colorHex, tonumber(l_capturedQuestID) or 28113, sirusTypeParam, finalShortTitle)
                                                     
                                                     editBox:Insert(officialSirusLink .. " ")
+                                                    editBox:SetFocus()
                                                 end
                                             end
                                         end)
@@ -1078,13 +1657,15 @@ UpdateGUIText = function()
         end
 
         if not hasAnyData then
-            local emptyFs = AcquireFontString(child, "GameFontNormal", 0.7, 0.7, 0.7, "LEFT", 440, 10, yOffset)
+            local emptyFs = AcquireFontString(child, "GameFontNormal", 0.7, 0.7, 0.7, "LEFT", child:GetWidth() - 20, 10, yOffset)
             emptyFs:SetText("База данных пуста или совпадений не найдено.")
             yOffset = yOffset - (emptyFs:GetStringHeight() + 10)
             table.insert(child.widgets, emptyFs)
         end
         child:SetHeight(math.abs(yOffset) + 20)
     end
+
+    if #newQuestTagLabels > 0 then newQuestTagPulse:Show() end
 
   end
 end
@@ -1231,57 +1812,117 @@ end
 CreateFilterGUI = function()
     if filterGui then return filterGui end
     local fGui = CreateFrame("Frame", "SirusBPFilterGUI", UIParent)
-    fGui:SetSize(450, 490)
+    fGui:SetSize(500, 550)
     fGui:SetPoint("CENTER", 120, -40)
     fGui:SetFrameStrata("DIALOG")
     fGui:SetFrameLevel(mainGui and (mainGui:GetFrameLevel() + 5) or 10)
     
     fGui:SetBackdrop({
         bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        tile = true, tileSize = 16, edgeSize = 14, insets = { left = 3, right = 3, top = 3, bottom = 3 }
+        tile = false, edgeSize = 14, insets = { left = 3, right = 3, top = 3, bottom = 3 }
     })
-    fGui:SetBackdropColor(0.05, 0.05, 0.05, 1.0)
+    SetAddonBackgroundColor(fGui)
     fGui:SetBackdropBorderColor(0.5, 0.5, 0.5, 1.0)
     fGui:EnableMouse(true) fGui:SetMovable(true) fGui:RegisterForDrag("LeftButton")
     fGui:SetScript("OnDragStart", fGui.StartMoving) fGui:SetScript("OnDragStop", fGui.StopMovingOrSizing)
-    tinsert(UISpecialFrames, "SirusBPFilterGUI")
+    fGui:SetScript("OnHide", ScheduleAddonEscapeFrameUpdate)
 
     local title = fGui:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     title:SetPoint("TOPLEFT", 16, -14) 
     title:SetText("Настройки")
 
+    local headerBackground = fGui:CreateTexture(nil, "BACKGROUND")
+    headerBackground:SetTexture("Interface\\Buttons\\WHITE8X8")
+    headerBackground:SetPoint("TOPLEFT", fGui, "TOPLEFT", 4, -4)
+    headerBackground:SetPoint("TOPRIGHT", fGui, "TOPRIGHT", -4, -4)
+    headerBackground:SetHeight(29)
+    headerBackground:SetVertexColor(0, 0, 0, 0.45)
+
+    local titleSeparator = fGui:CreateTexture(nil, "BORDER")
+    titleSeparator:SetTexture("Interface\\Buttons\\WHITE8X8")
+    titleSeparator:SetHeight(1)
+    titleSeparator:SetPoint("TOPLEFT", fGui, "TOPLEFT", 10, -32)
+    titleSeparator:SetPoint("TOPRIGHT", fGui, "TOPRIGHT", -10, -32)
+    titleSeparator:SetVertexColor(0.85, 0.65, 0.25, 0.9)
+
     local closeBtn = CreateFrame("Button", nil, fGui, "UIPanelCloseButton")
     closeBtn:SetPoint("TOPRIGHT", -3, -3)
+    SetRedButtonStyle(closeBtn)
 
-    -- Кнопка "Очистить БД" (Очищает и диск, и живое ОЗУ мгновенно)
---sbpt-v190: ВОССТАНОВЛЕНИЕ ФРЕЙМА КНОПКИ И АБСОЛЮТНОЕ ОБНУЛЕНИЕ БАЗ ДАННЫХ И ОЗУ БЕЗ ХВОСТОВ
-    local clearAllBtn = CreateFrame("Button", "SirusBPClearAllBtn", fGui, "UIPanelButtonTemplate")
-    clearAllBtn:SetSize(95, 22)
-    clearAllBtn:SetPoint("LEFT", title, "RIGHT", 15, -1)
-    clearAllBtn:SetText("Очистить БД")
+    local clearAllBtn = CreateFrame("Button", "SirusBPClearAllBtn", fGui)
+    clearAllBtn:SetSize(150, 22)
+    clearAllBtn:SetPoint("CENTER", fGui, "TOP", 0, -17)
+    SetRedButtonStyle(clearAllBtn)
+    local clearAllText = clearAllBtn:CreateFontString(nil, "OVERLAY")
+    clearAllText:SetFont("Fonts\\FRIZQT__.TTF", 11, "OUTLINE")
+    clearAllText:SetPoint("CENTER", clearAllBtn, "CENTER", 0, 0)
+    clearAllText:SetText("Очистить базу данных")
+    clearAllText:SetTextColor(1, 0.9, 0.75, 1)
     clearAllBtn:RegisterForClicks("LeftButtonUp")
+    StaticPopupDialogs["SIRUSBP_CONFIRM_CLEAR_DB"] = {
+        text = "Вы точно хотите очистить базу данных?",
+        button1 = "Да",
+        button2 = "Нет",
+        OnAccept = function()
+            ExecuteSBPTDatabaseMigration(true)
+            if UpdateGUIText then UpdateGUIText() end
+            if fGui.RefreshList then fGui.RefreshList() end
+            DEFAULT_CHAT_FRAME:AddMessage("|cffff0000[SirusBP]|r Глобальная база данных, фильтры и ОЗУ полностью уничтожены! Аддон сброшен к первому запуску.")
+        end,
+        timeout = 0,
+        whileDead = true,
+        hideOnEscape = true,
+        preferredIndex = 3,
+    }
     clearAllBtn:SetScript("OnClick", function()
-        -- Полностью уничтожаем все таблицы в файле WTF на жестком диске
-        -- Полностью выжигаем оперативную память (ОЗУ-кэш) аддона
-        ExecuteSBPTDatabaseMigration(true)
-        -- Принудительно командуем интерфейсу перерисовать абсолютно пустые экраны
-        if UpdateGUIText then UpdateGUIText() end
-        if fGui.RefreshList then fGui.RefreshList() end
-        
-        DEFAULT_CHAT_FRAME:AddMessage("|cffff0000[SirusBP]|r Глобальная база данных, фильтры и ОЗУ полностью уничтожены! Аддон сброшен к первому запуску.")
+        StaticPopup_Show("SIRUSBP_CONFIRM_CLEAR_DB")
     end)
--- Конец фикса фрейма кнопки очистки
 
+    local settingsTabs = {}
+    local settingsTabNames = { "Основные", "Персонажи", "Квесты" }
+    for i = 1, 3 do
+        local tabIndex = i
+        local tab = CreateFrame("Button", nil, fGui)
+        tab:SetSize(150, 24)
+        tab:SetPoint("TOPLEFT", fGui, "TOPLEFT", 12 + (i - 1) * 155, -40)
+        tab.text = tab:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        tab.text:SetPoint("CENTER")
+        tab.text:SetText(settingsTabNames[tabIndex])
+        SetBlueTabStyle(tab, false)
+        settingsTabs[i] = tab
+    end
 
-    local sborTitle = fGui:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    sborTitle:SetPoint("TOPLEFT", 16, -44)
-    sborTitle:SetText("=== Сборы ===")
+    local scrollFrame = CreateFrame("ScrollFrame", "SirusBPFilterScrollFrame", fGui, "UIPanelScrollFrameTemplate")
+    scrollFrame:SetPoint("TOPLEFT", fGui, "TOPLEFT", 10, -80)
+    scrollFrame:SetPoint("BOTTOMRIGHT", fGui, "BOTTOMRIGHT", -30, 10)
 
-    local showLfgCb = CreateFrame("CheckButton", "SirusBPShowLfgCheckButton", fGui, "InterfaceOptionsCheckButtonTemplate")
-    showLfgCb:SetPoint("TOPLEFT", 16, -62)
+    local pages = {}
+    for i = 1, 3 do
+        local page = CreateFrame("Frame", nil, scrollFrame)
+        page:SetSize(440, 1)
+        page:Hide()
+        pages[i] = page
+    end
+    fGui.pages = pages
+    fGui.activePage = 1
+    fGui.scrollChild = pages[1]
+
+    local headerSeparator = fGui:CreateTexture(nil, "BORDER")
+    headerSeparator:SetTexture("Interface\\Buttons\\WHITE8X8")
+    headerSeparator:SetHeight(1)
+    headerSeparator:SetPoint("TOPLEFT", fGui, "TOPLEFT", 10, -70)
+    headerSeparator:SetPoint("TOPRIGHT", fGui, "TOPRIGHT", -10, -70)
+    headerSeparator:SetVertexColor(0.85, 0.65, 0.25, 0.85)
+
+    local showLfgCb = CreateFrame("CheckButton", "SirusBPShowLfgCheckButton", pages[1], "InterfaceOptionsCheckButtonTemplate")
     
     local showLfgCbText = _G[showLfgCb:GetName() .. "Text"]
-    if showLfgCbText then showLfgCbText:SetText("Только БП сборы") end
+    if showLfgCbText then showLfgCbText:SetText("") showLfgCbText:Hide() end
+    local showLfgLabel = pages[1]:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    showLfgCb:SetPoint("TOPLEFT", pages[1], "TOPLEFT", 12, -2)
+    showLfgLabel:SetPoint("LEFT", showLfgCb, "RIGHT", 2, 0)
+    showLfgLabel:SetText("Отображать только сборы на задания боевого пропуска")
+    showLfgLabel:SetTextColor(1, 0.82, 0, 1)
     
     if SirusBPTrackerConfig == nil then SirusBPTrackerConfig = {} end
     if SirusBPTrackerConfig.OnlyBpSbors == nil then SirusBPTrackerConfig.OnlyBpSbors = false end
@@ -1292,18 +1933,122 @@ CreateFilterGUI = function()
         if UpdateGUIText then UpdateGUIText() end
     end)
 
+    local function CreateSettingsSeparator(yOffset)
+        local separator = pages[1]:CreateTexture(nil, "BORDER")
+        separator:SetTexture("Interface\\Buttons\\WHITE8X8")
+        separator:SetPoint("TOPLEFT", pages[1], "TOPLEFT", 14, yOffset)
+        separator:SetSize(400, 1)
+        separator:SetVertexColor(0.45, 0.45, 0.45, 0.8)
+    end
+
+    local function CreatePaletteControl(labelText, yOffset, getColor, applyColor)
+        local button = CreateFrame("Button", nil, pages[1])
+        button:SetSize(92, 22)
+        button:SetPoint("TOPLEFT", pages[1], "TOPLEFT", 16, yOffset)
+        SetRedButtonStyle(button)
+
+        local swatch = button:CreateTexture(nil, "ARTWORK")
+        swatch:SetTexture("Interface\\Buttons\\WHITE8X8")
+        swatch:SetSize(22, 14)
+        swatch:SetPoint("LEFT", button, "LEFT", 5, 0)
+
+        local buttonText = button:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        buttonText:SetPoint("LEFT", swatch, "RIGHT", 5, 0)
+        buttonText:SetText("Палитра")
+
+        local label = pages[1]:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        label:SetPoint("LEFT", button, "RIGHT", 8, 0)
+        label:SetText(labelText)
+
+        local r, g, b = getColor()
+        swatch:SetVertexColor(r, g, b, 1)
+        button:SetScript("OnClick", function()
+            local previousR, previousG, previousB = getColor()
+            ColorPickerFrame.hasOpacity = false
+            ColorPickerFrame.previousValues = { r = previousR, g = previousG, b = previousB }
+            ColorPickerFrame.func = function()
+                local newR, newG, newB = ColorPickerFrame:GetColorRGB()
+                applyColor(newR, newG, newB)
+                swatch:SetVertexColor(newR, newG, newB, 1)
+            end
+            ColorPickerFrame.cancelFunc = function(previousValues)
+                if previousValues then
+                    applyColor(previousValues.r, previousValues.g, previousValues.b)
+                    swatch:SetVertexColor(previousValues.r, previousValues.g, previousValues.b, 1)
+                end
+            end
+            ColorPickerFrame:SetColorRGB(previousR, previousG, previousB)
+            ColorPickerFrame:Show()
+        end)
+    end
+
+    CreateSettingsSeparator(-34)
+    CreatePaletteControl("Цвет фона", -42, GetMainBackgroundColor, function(r, g, b)
+        SirusBPTrackerConfig.BackgroundColor = { r, g, b }
+        SetAddonBackgroundColor(mainGui)
+        SetAddonBackgroundColor(filterGui)
+        SetAddonBackgroundColor(helpGui)
+    end)
+    CreateSettingsSeparator(-74)
+    CreatePaletteControl("Цвет полос прогресса", -82, GetProgressBarColor, function(r, g, b)
+        SirusBPTrackerConfig.ProgressBarColor = { r, g, b }
+        if UpdateGUIText then UpdateGUIText() end
+    end)
+
+    CreateSettingsSeparator(-114)
+    local fontSizeSlider = CreateFrame("Slider", "SirusBPFontSizeSlider", pages[1], "OptionsSliderTemplate")
+    fontSizeSlider:SetWidth(180)
+    fontSizeSlider:SetPoint("TOPLEFT", pages[1], "TOPLEFT", 16, -122)
+    fontSizeSlider:SetMinMaxValues(MAIN_FONT_MIN_SIZE, MAIN_FONT_MAX_SIZE)
+    fontSizeSlider:SetValueStep(1)
+    if fontSizeSlider.SetObeyStepOnDrag then fontSizeSlider:SetObeyStepOnDrag(true) end
+
+    local fontSizeValue = pages[1]:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    fontSizeValue:SetPoint("LEFT", fontSizeSlider, "RIGHT", 8, 0)
+    fontSizeValue:SetWidth(28)
+    fontSizeValue:SetJustifyH("CENTER")
+
+    local fontSizeLabel = pages[1]:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    fontSizeLabel:SetPoint("LEFT", fontSizeValue, "RIGHT", 6, 0)
+    fontSizeLabel:SetText("размер шрифта")
+
+    SirusBPTrackerConfig.FontSize = GetMainFontSize()
+    fontSizeSlider:SetValue(SirusBPTrackerConfig.FontSize)
+    fontSizeValue:SetText(tostring(SirusBPTrackerConfig.FontSize))
+    fontSizeSlider:SetScript("OnValueChanged", function(self, value)
+        local size = math.max(MAIN_FONT_MIN_SIZE, math.min(MAIN_FONT_MAX_SIZE, math.floor(value + 0.5)))
+        if SirusBPTrackerConfig.FontSize == size then return end
+        SirusBPTrackerConfig.FontSize = size
+        fontSizeValue:SetText(tostring(size))
+        if UpdateGUIText then UpdateGUIText() end
+        if DrawActivitiesTab and activitiesScrollFrame and activitiesScrollFrame:IsShown() then
+            DrawActivitiesTab()
+        end
+        ApplySettingsFontSize(fGui)
+    end)
+    pages[1]:SetHeight(160)
+
+    local questFilterHint = fGui:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    questFilterHint:SetPoint("TOPLEFT", fGui, "TOPLEFT", 14, -76)
+    questFilterHint:SetText("Учитывать только эти квесты")
+    questFilterHint:SetTextColor(0.65, 0.65, 0.65, 1)
+    questFilterHint:Hide()
+
     local fSearchBox = CreateFrame("EditBox", "SirusBPFilterSearchBox", fGui)
-    fSearchBox:SetSize(120, 20)
-    fSearchBox:SetPoint("TOPRIGHT", fGui, "TOPRIGHT", -35, -14)
+    fSearchBox:SetSize(150, 20)
     fSearchBox:SetAutoFocus(false)
     fSearchBox:SetFontObject("GameFontHighlightSmall")
     fSearchBox:SetTextInsets(6, 6, 0, 0)
+    fSearchBox:ClearAllPoints()
+    fSearchBox:SetPoint("TOPRIGHT", fGui, "TOPRIGHT", -40, -76)
     fSearchBox:SetBackdrop({
         bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
         tile = true, tileSize = 12, edgeSize = 10, insets = { left = 2, right = 2, top = 2, bottom = 2 }
     })
-    fSearchBox:SetBackdropColor(0.01, 0.01, 0.01, 1.0)
+    fSearchBox:SetBackdropColor(0.01, 0.01, 0.01, 0.8)
     fSearchBox:SetBackdropBorderColor(0.4, 0.4, 0.4, 1.0)
+    fSearchBox:ClearAllPoints()
+    fSearchBox:SetPoint("TOPRIGHT", fGui, "TOPRIGHT", -40, -76)
 
     local fSearchPrompt = fSearchBox:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     fSearchPrompt:SetPoint("LEFT", fSearchBox, "LEFT", 6, 0)
@@ -1311,28 +2056,65 @@ CreateFilterGUI = function()
     
     fSearchBox:SetScript("OnTextChanged", function(self)
         if self:GetText() ~= "" then fSearchPrompt:Hide() else fSearchPrompt:Show() end
-        if fGui.RefreshList then fGui.RefreshList() end
+        if fGui.activePage == 3 and fGui.RefreshList then fGui.RefreshList() end
     end)
-    fSearchBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    fSearchBox:SetScript("OnEscapePressed", function(self)
+        self:ClearFocus()
+        fGui:Hide()
+    end)
     fGui.searchBox = fSearchBox
+    fSearchBox:Hide()
 
-    local scrollFrame = CreateFrame("ScrollFrame", "SirusBPFilterScrollFrame", fGui, "UIPanelScrollFrameTemplate")
-    scrollFrame:SetPoint("TOPLEFT", 10, -92) scrollFrame:SetPoint("BOTTOMRIGHT", -30, 10)
+    local function SelectSettingsPage(pageIndex)
+        fGui.activePage = pageIndex
+        for i, page in ipairs(pages) do
+            page:Hide()
+            SetBlueTabStyle(settingsTabs[i], i == pageIndex)
+        end
+        local page = pages[pageIndex]
+        scrollFrame:ClearAllPoints()
+        scrollFrame:SetPoint("TOPLEFT", fGui, "TOPLEFT", 10, pageIndex == 3 and -106 or -80)
+        scrollFrame:SetPoint("BOTTOMRIGHT", fGui, "BOTTOMRIGHT", -30, 10)
+        page:SetWidth(math.max(1, scrollFrame:GetWidth() - 20))
+        page:Show()
+        scrollFrame:SetScrollChild(page)
+        fGui.scrollChild = page
+        if pageIndex == 3 then
+            questFilterHint:Show()
+            fSearchBox:Show()
+        else
+            questFilterHint:Hide()
+            fSearchBox:Hide()
+        end
+        if fGui.RefreshList then fGui.RefreshList() end
+        ApplySettingsFontSize(fGui)
+    end
+    for i, tab in ipairs(settingsTabs) do
+        local tabIndex = i
+        tab:SetScript("OnClick", function() SelectSettingsPage(tabIndex) end)
+    end
+    fGui:SetScript("OnShow", function()
+        UpdateAddonEscapeFrame()
+        SelectSettingsPage(fGui.activePage or 1)
+        ApplySettingsFontSize(fGui)
+    end)
 
-    local scrollChild = CreateFrame("Frame", nil, scrollFrame)
-    scrollChild:SetSize(390, 1) scrollFrame:SetScrollChild(scrollChild)
-    fGui.scrollChild = scrollChild
 -- КОНЕЦ ВЕРХНЕЙ ЧАСТИ ОКНА НАСТРОЕК
     fGui.RefreshList = function()
-        local child = fGui.scrollChild
+        local child = pages[fGui.activePage]
         if child.widgets then
             for _, w in ipairs(child.widgets) do w:Hide() if w.SetChecked then w:SetScript("OnClick", nil) end end
         end
         child.widgets = {}
 
         local fSearchText = ""
-        if SirusBPFilterSearchBox then
+        if fGui.activePage == 3 and SirusBPFilterSearchBox then
             fSearchText = string.lower(SirusBPFilterSearchBox:GetText() or "")
+        end
+
+        if fGui.activePage == 1 then
+            child:SetHeight(212)
+            return
         end
 
         local uniqueCharacters = {}
@@ -1367,21 +2149,31 @@ CreateFilterGUI = function()
             fyOffset = fyOffset - 20 table.insert(child.widgets, hFs)
         end
 
-        if fSearchText == "" then
-            AddHeader("=== Персонажи ===", 1, 0.82, 0)
+        if fGui.activePage == 2 then
+            local characterHint = child:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            characterHint:SetPoint("TOPLEFT", 15, fyOffset)
+            characterHint:SetText("Учитывать только этих персонажей")
+            characterHint:SetTextColor(0.75, 0.75, 0.75, 1)
+            table.insert(child.widgets, characterHint)
+            fyOffset = fyOffset - 24
+
             local sortedChars = {}
             for cName in pairs(uniqueCharacters) do table.insert(sortedChars, cName) end
             table.sort(sortedChars)
 
             for i, cName in ipairs(sortedChars) do
-                if SirusBPTrackerCharFilterDB[cName] == nil then SirusBPTrackerCharFilterDB[cName] = true end
+                local characterName = cName
+                if SirusBPTrackerCharFilterDB[characterName] == nil then SirusBPTrackerCharFilterDB[characterName] = true end
                 local cbName = "SirusBPCharCB_" .. widgetIdx
                 local cb = _G[cbName] or CreateFrame("CheckButton", cbName, child, "InterfaceOptionsCheckButtonTemplate")
                 cb:SetParent(child) cb:ClearAllPoints() cb:SetPoint("TOPLEFT", 15, fyOffset) cb:Show()
-                cb:SetChecked(SirusBPTrackerCharFilterDB[cName])
+                cb:SetChecked(SirusBPTrackerCharFilterDB[characterName])
                 cb:SetScript("OnClick", function(self)
-                    SirusBPTrackerCharFilterDB[cName] = self:GetChecked() and true or false
+                    SirusBPTrackerCharFilterDB[characterName] = self:GetChecked() and true or false
                     if UpdateGUIText then UpdateGUIText() end
+                    if DrawActivitiesTab and activitiesScrollFrame and activitiesScrollFrame:IsShown() then
+                        DrawActivitiesTab()
+                    end
                 end)
                 
                 -- Выгружаем точный токен класса из ОЗУ персонажа
@@ -1393,7 +2185,11 @@ CreateFilterGUI = function()
                 fyOffset = fyOffset - 26 widgetIdx = widgetIdx + 1
                 table.insert(child.widgets, cb) table.insert(child.widgets, t)
             end
-            fyOffset = fyOffset - 10
+            if #sortedChars == 0 then
+                AddHeader("Данные о персонажах пока не загружены.", 0.7, 0.7, 0.7)
+            end
+            child:SetHeight(math.abs(fyOffset) + 15)
+            return
         end
 
         -- Отрисовка списков отслеживания СТРОГО ПО ЧИСЛОВЫМ ID КВЕСТОВ
@@ -1410,7 +2206,20 @@ CreateFilterGUI = function()
             end
 
             if hasQuestsInCat and questsByCat[catName] then
-                AddHeader("=== " .. catName .. " ===", 0, 1, 1)
+                local categoryHeader = child:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+                categoryHeader:SetPoint("TOPLEFT", 10, fyOffset)
+                categoryHeader:SetText(catName)
+                categoryHeader:SetTextColor(0, 1, 1)
+                table.insert(child.widgets, categoryHeader)
+
+                local textWidth = math.floor(categoryHeader:GetStringWidth() + 0.5)
+                local categoryLine = child:CreateTexture(nil, "BACKGROUND")
+                categoryLine:SetTexture("Interface\\Buttons\\WHITE8X8")
+                categoryLine:SetSize(math.max(1, child:GetWidth() - 20 - textWidth - 10), 2)
+                categoryLine:SetPoint("LEFT", categoryHeader, "LEFT", textWidth + 10, -1)
+                categoryLine:SetVertexColor(0, 1, 1, 0.75)
+                table.insert(child.widgets, categoryLine)
+                fyOffset = fyOffset - (categoryHeader:GetStringHeight() + 4)
                 
                 -- Сортируем квесты по их красивым названиям для алфавитного порядка галочек
                 local sortedQuests = {}
@@ -1423,17 +2232,18 @@ CreateFilterGUI = function()
 
                 for _, qInfo in ipairs(sortedQuests) do
                     local qID = qInfo.id
+                    local questID = qID
                     local dispName = qInfo.text
                     
-                    if SirusBPTrackerFilterDB[qID] == nil then SirusBPTrackerFilterDB[qID] = true end
+                    if SirusBPTrackerFilterDB[questID] == nil then SirusBPTrackerFilterDB[questID] = true end
                     
                     local cbName = "SirusBPQuestCB_" .. widgetIdx
                     local cb = _G[cbName] or CreateFrame("CheckButton", cbName, child, "InterfaceOptionsCheckButtonTemplate")
                     cb:SetParent(child) cb:ClearAllPoints() cb:SetPoint("TOPLEFT", 15, fyOffset) cb:Show()
-                    cb:SetChecked(SirusBPTrackerFilterDB[qID] ~= false)
+                    cb:SetChecked(SirusBPTrackerFilterDB[questID] ~= false)
                     
                     cb:SetScript("OnClick", function(self)
-                        SirusBPTrackerFilterDB[qID] = self:GetChecked() and true or false
+                        SirusBPTrackerFilterDB[questID] = self:GetChecked() and true or false
                         if UpdateGUIText then UpdateGUIText() end
                     end)
 
@@ -1448,9 +2258,13 @@ CreateFilterGUI = function()
             end
         end
 
+        if fyOffset == -5 then
+            AddHeader("Квесты не найдены.", 0.7, 0.7, 0.7)
+        end
         child:SetHeight(math.abs(fyOffset) + 15)
     end
-    fGui:SetScript("OnShow", fGui.RefreshList)
+    SelectSettingsPage(1)
+    ApplySettingsFontSize(fGui)
     fGui:Hide()
     filterGui = fGui
     return filterGui
@@ -1465,26 +2279,43 @@ CreateHelpGUI = function()
     hGui:SetPoint("CENTER", 0, 40)
     hGui:SetFrameStrata("DIALOG")
     hGui:SetBackdrop({
-        bgFile = "Interface\\ChatFrame\\ChatFrameBackground", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        tile = true, tileSize = 16, edgeSize = 14, insets = { left = 3, right = 3, top = 3, bottom = 3 }
+        bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = false, edgeSize = 14, insets = { left = 3, right = 3, top = 3, bottom = 3 }
     })
-    hGui:SetBackdropColor(0.05, 0.05, 0.05, 0.95)
+    SetAddonBackgroundColor(hGui)
     hGui:SetBackdropBorderColor(0.5, 0.5, 0.5, 1)
+
+    local headerBackground = hGui:CreateTexture(nil, "BACKGROUND")
+    headerBackground:SetTexture("Interface\\Buttons\\WHITE8X8")
+    headerBackground:SetPoint("TOPLEFT", hGui, "TOPLEFT", 4, -4)
+    headerBackground:SetPoint("TOPRIGHT", hGui, "TOPRIGHT", -4, -4)
+    headerBackground:SetHeight(29)
+    headerBackground:SetVertexColor(0, 0, 0, 0.45)
+
+    local titleSeparator = hGui:CreateTexture(nil, "BORDER")
+    titleSeparator:SetTexture("Interface\\Buttons\\WHITE8X8")
+    titleSeparator:SetHeight(1)
+    titleSeparator:SetPoint("TOPLEFT", hGui, "TOPLEFT", 10, -32)
+    titleSeparator:SetPoint("TOPRIGHT", hGui, "TOPRIGHT", -10, -32)
+    titleSeparator:SetVertexColor(0.85, 0.65, 0.25, 0.9)
     
     hGui:EnableMouse(true)
     hGui:SetMovable(true)
     hGui:RegisterForDrag("LeftButton")
     hGui:SetScript("OnDragStart", hGui.StartMoving)
     hGui:SetScript("OnDragStop", hGui.StopMovingOrSizing)
-    tinsert(UISpecialFrames, "SirusBPHelpGUI")
+    hGui:SetScript("OnShow", UpdateAddonEscapeFrame)
+    hGui:SetScript("OnHide", ScheduleAddonEscapeFrameUpdate)
 
     -- Заголовок окна
     local title = hGui:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     title:SetPoint("TOPLEFT", 16, -14)
-    title:SetText("Об аддоне SirusBPTracker")
+    local addonVersion = GetAddOnMetadata and GetAddOnMetadata("SirusBPTracker", "Version")
+    title:SetText("Об аддоне SirusBPTracker" .. (addonVersion and (" v" .. addonVersion) or ""))
 
     local closeBtn = CreateFrame("Button", nil, hGui, "UIPanelCloseButton")
     closeBtn:SetPoint("TOPRIGHT", -3, -3)
+    SetRedButtonStyle(closeBtn)
 
     -- 1. ИСПРАВЛЕНО: 
     local helpText = hGui:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -1624,6 +2455,7 @@ frame:SetScript("OnEvent", function(self, event, arg1, ...)
         if not SirusBPTrackerFilterDB then SirusBPTrackerFilterDB = {} end
         if not SirusBPTrackerCharFilterDB then SirusBPTrackerCharFilterDB = {} end
         if not SirusBPTrackerConfig then SirusBPTrackerConfig = { minimapPos = 45 } end
+        if not SirusBPTrackerNewQuestDB then SirusBPTrackerNewQuestDB = {} end
         
         if ExecuteSBPTDatabaseMigration then
             ExecuteSBPTDatabaseMigration(false)
@@ -1638,6 +2470,11 @@ frame:SetScript("OnEvent", function(self, event, arg1, ...)
                             ramCacheDB[k][charName] = {
                                 name = charData.name,
                                 class = charData.class,
+                                battlePassLevel = charData.battlePassLevel,
+                                battlePassExperience = charData.battlePassExperience,
+                                battlePassExperienceRequired = charData.battlePassExperienceRequired,
+                                experienceBonusPercent = charData.experienceBonusPercent,
+                                lastScanTime = charData.lastScanTime,
                                 quests = {},
                                 activities = {}
                             }
@@ -1645,7 +2482,10 @@ frame:SetScript("OnEvent", function(self, event, arg1, ...)
                                 for actKey, actData in pairs(charData.activities) do
                                     ramCacheDB[k][charName].activities[actKey] = {
                                         status = actData.status,
-                                        lastCheck = actData.lastCheck
+                                        lastCheck = actData.lastCheck,
+                                        questID = actData.questID,
+                                        questName = actData.questName,
+                                        questProgress = actData.questProgress
                                     }
                                 end
                             end
@@ -1684,7 +2524,9 @@ frame:SetScript("OnEvent", function(self, event, arg1, ...)
     elseif event == "QUEST_TURNED_IN" or event == "QUEST_LOG_UPDATE" or event == "QUEST_ACCEPTED" or event == "UNIT_QUEST_LOG_CHANGED" then
         -- Выполняем базовое обновление КД активностей третьей вкладки твинков
         if QueryQuestsCompleted then QueryQuestsCompleted() end
-        if UpdateCurrentCharacterActivities then UpdateCurrentCharacterActivities() end
+        if UpdateCurrentCharacterActivities then
+            UpdateCurrentCharacterActivities(event == "QUEST_TURNED_IN" and arg1 or nil)
+        end
         
         -- ИСПРАВЛЕНО (ТВОЙ АЛГОРИТМ): Если вылетело QUEST_LOG_UPDATE и наш флаг ожидания сдачи БП активен!
         if sbptBPNeedRefresh or event == "QUEST_TURNED_IN" then
@@ -1982,6 +2824,11 @@ function SaveRAMCacheToDisk()
                     local diskChar = SirusBPTrackerDB[realm][name]
                     diskChar.name = data.name
                     diskChar.class = data.class
+                    diskChar.battlePassLevel = data.battlePassLevel
+                    diskChar.battlePassExperience = data.battlePassExperience
+                    diskChar.battlePassExperienceRequired = data.battlePassExperienceRequired
+                    diskChar.experienceBonusPercent = data.experienceBonusPercent
+                    diskChar.lastScanTime = data.lastScanTime
                     diskChar.quests = {}
                     if data.quests then
                         for qID, qData in pairs(data.quests) do
@@ -2003,6 +2850,46 @@ end
 
 --sbpt-v164-pure-memory-core: МГНОВЕННЫЙ И БЕСШУМНЫЙ СБОР ДАННЫХ ИЗ НАПРАВЛЕННОЙ ПАМЯТИ СИРУСА
 local lastScanTime = 0
+
+local function UpdateNewQuestTracking(realm, charName, quests)
+    if not SirusBPTrackerNewQuestDB then SirusBPTrackerNewQuestDB = {} end
+    if not SirusBPTrackerNewQuestDB[realm] then SirusBPTrackerNewQuestDB[realm] = {} end
+
+    local record = SirusBPTrackerNewQuestDB[realm][charName]
+    local currentSnapshot = {}
+    for questID, quest in pairs(quests) do
+        local id = tostring(questID)
+        local questType = tonumber(quest.type) or 2
+        currentSnapshot[id] = questType
+    end
+
+    if not record or type(record.snapshot) ~= "table" then
+        SirusBPTrackerNewQuestDB[realm][charName] = {
+            snapshot = currentSnapshot,
+            newQuests = {}
+        }
+        return
+    end
+
+    local currentTime = time()
+    if type(record.newQuests) ~= "table" then record.newQuests = {} end
+    for questID, questType in pairs(currentSnapshot) do
+        if record.snapshot[questID] ~= questType then
+            record.newQuests[questID] = {
+                type = questType,
+                periodStart = GetQuestPeriodStart(questType, currentTime)
+            }
+        end
+    end
+
+    for questID, newQuest in pairs(record.newQuests) do
+        if newQuest.periodStart ~= GetQuestPeriodStart(newQuest.type, currentTime) then
+            record.newQuests[questID] = nil
+        end
+    end
+
+    record.snapshot = currentSnapshot
+end
 
 function ExecuteSilentBPScan(force) 
     local pName = UnitName("player")
@@ -2027,8 +2914,15 @@ function ExecuteSilentBPScan(force)
     charData.name = pName
     local _, classEng = UnitClass("player")
     if classEng then charData.class = classEng end
+    local levelInfoSuccess, bpLevel, bpExperience, bpExperienceRequired = pcall(C_BattlePass.GetLevelInfo)
+    if levelInfoSuccess then
+        charData.battlePassLevel = tonumber(bpLevel)
+        charData.battlePassExperience = tonumber(bpExperience)
+        charData.battlePassExperienceRequired = tonumber(bpExperienceRequired)
+    end
     charData.quests = {}
-
+    local experienceBonusPercent
+    
     local totalQuestsFound = 0
     
     for questType = 1, 2 do
@@ -2045,6 +2939,19 @@ function ExecuteSilentBPScan(force)
             local idSuccess, questID = pcall(function() return C_BattlePass.GetQuestID(questType, i) end)
             
             if idSuccess and questID then
+                if experienceBonusPercent == nil and type(C_BattlePass.GetQuestBonusXP) == "function" then
+                    local bonusSuccess, bonusXP = pcall(C_BattlePass.GetQuestBonusXP, questID)
+                    if bonusSuccess then
+                        experienceBonusPercent = tonumber(bonusXP)
+                        if experienceBonusPercent and experienceBonusPercent > 0 and experienceBonusPercent <= 1 then
+                            experienceBonusPercent = experienceBonusPercent * 100
+                        end
+                    elseif not bonusXPApiErrorReported then
+                        print("|cffff0000[SBPT] Ошибка C_BattlePass.GetQuestBonusXP: " .. tostring(bonusXP) .. "|r")
+                        bonusXPApiErrorReported = true
+                    end
+                end
+
                 local infoSuccess, qTitle, b, c, d, curProg, maxGoal = pcall(function() 
                     return C_BattlePass.GetQuestInfoID(questID) 
                 end)
@@ -2069,6 +2976,15 @@ function ExecuteSilentBPScan(force)
         end
     end
     
+    if experienceBonusPercent ~= nil then
+        charData.experienceBonusPercent = experienceBonusPercent
+    end
+
+    if totalQuestsFound > 0 then
+        charData.lastScanTime = time()
+        UpdateNewQuestTracking(pRealm, pName, charData.quests)
+    end
+
     lastScanTime = time()
 
     if mainGui and mainGui:IsShown() and UpdateGUIText then
@@ -2162,6 +3078,7 @@ function ExecuteSBPTDatabaseMigration(forceClear)
         SirusBPTrackerDB = {}
         SirusBPTrackerFilterDB = {}
         SirusBPTrackerCharFilterDB = {}
+        SirusBPTrackerNewQuestDB = {}
         
         -- Намертво защищаем фоновый парсер чата от миллисекундного вакуума (nil), создавая буфер сборов мгновенно
         SirusBPTrackerDB["QUEST_LFG"] = {} 
@@ -2231,6 +3148,20 @@ SlashCmdList["SBPTFINDER"] = function(msg)
 end
 --
 --sbpt-v348 [ЧАСТЬ 1]: РАСЧЕТ ТАЙМЕРОВ КД И СТАЛЬНАЯ ДВУХЭТАЖНАЯ ШАПКА ТАБЛИЦЫ АКТИВНОСТЕЙ
+local LANDALOCK_QUEST_NAMES = {
+    [24580] = "Ануб'Рекан должен умереть!",
+    [24582] = "Нот Чумной должен умереть!",
+    [24583] = "Лоскутик должен умереть!",
+    [24579] = "Сартарион должен умереть!",
+    [24584] = "Малигос должен умереть!",
+    [24581] = "Огненный Левиафан должен умереть!",
+    [24586] = "Острокрылая должна умереть!",
+    [24585] = "Игнис Повелитель Горнов должен умереть!",
+    [24587] = "Разрушитель XT-002 должен умереть!",
+    [24589] = "Лорд Джараксус должен умереть!",
+    [24590] = "Лорд Ребрад должен умереть!",
+}
+
 local activityRowsPool = {}
 local activitiesHeaderFrame = nil
 local currentRealm = GetRealmName() or "Unknown"
@@ -2255,7 +3186,10 @@ function DrawActivitiesTab()
     local sortedChars = {}
     if ramCacheDB and ramCacheDB[currentRealm] then
         for charName, charData in pairs(ramCacheDB[currentRealm]) do
-            if type(charData) == "table" and charName ~= "QUEST_LFG" and charName ~= "Version" then
+            if type(charData) == "table"
+                and charName ~= "QUEST_LFG"
+                and charName ~= "Version"
+                and (not SirusBPTrackerCharFilterDB or SirusBPTrackerCharFilterDB[charName] ~= false) then
                 table.insert(sortedChars, {
                     name = charName,
                     class = charData.class or "UNKNOWN"
@@ -2269,10 +3203,11 @@ function DrawActivitiesTab()
         { key = "KELDANAS_COIN", texture = "Interface\\Icons\\INV_Misc_Coin_01",         name = "Щедрое пожертвование", type = "daily" },
         { key = "WEEKLY_HUNT",  texture = "Interface\\Icons\\INV_Weapon_Bow_05",         name = "Охота на Великих Чудовищ", type = "weekly" },
         { key = "NORIGORN",     texture = "Interface\\Icons\\Ability_Creature_Cursed_05",    name = "Обуздать твердыню", type = "weekly" },
+        { key = "LANDALOCK",    texture = "Interface\\Icons\\INV_Misc_Note_01",          name = "Недельное задание Лан'далока", type = "weekly" },
+        { key = "GLOBAL_THREAT", texture = "Interface\\Icons\\INV_Misc_GroupNeedMore",   name = "Глобальная угроза", type = "weekly" },
     }
     
-    local startXOffset = 220
-    local stepXOffset = 65
+    local startXOffset = 150
     
     activitiesHeaderFrame = CreateFrame("Frame", nil, child)
     activitiesHeaderFrame:SetSize(child:GetWidth() - 10, 42)
@@ -2298,10 +3233,10 @@ function DrawActivitiesTab()
     local wMins = math.floor((wDiff % 3600) / 60)
 
     local hTimeStr = activitiesHeaderFrame:CreateFontString(nil, "OVERLAY")
-    hTimeStr:SetFont("Fonts\\FRIZQT__.TTF", 10, "NORMAL")
+    hTimeStr:SetFont("Fonts\\FRIZQT__.TTF", math.max(8, GetMainFontSize() - 1), "NORMAL")
     hTimeStr:SetPoint("TOPLEFT", activitiesHeaderFrame, "TOPLEFT", 10, 0)
     hTimeStr:SetTextColor(0.5, 0.5, 0.5)
-    hTimeStr:SetText(string.format("КД Монета: %d ч. %d мин.  |  КД Охота/Норигорн: %d дн. %d ч. %d мин.", dHours, dMins, wDays, wHours, wMins))
+    hTimeStr:SetText(string.format("КД дейли: %d ч. %d мин.  |  КД викли: %d дн. %d ч. %d мин.", dHours, dMins, wDays, wHours, wMins))
 
     local topHeaderLine = activitiesHeaderFrame:CreateTexture(nil, "BACKGROUND")
     topHeaderLine:SetSize(activitiesHeaderFrame:GetWidth() - 10, 1)
@@ -2318,24 +3253,75 @@ function DrawActivitiesTab()
     bottomHeaderLine:SetAlpha(0.35)
 
     local hTitle = activitiesHeaderFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    hTitle:SetFont("Fonts\\FRIZQT__.TTF", GetMainFontSize(), "OUTLINE")
     hTitle:SetPoint("LEFT", activitiesHeaderFrame, "LEFT", 10, -3)
     hTitle:SetText("Персонажи")
     hTitle:SetTextColor(1, 0.82, 0)
 
-    local headerTextMap = { "Монета", "Охота", "Норигорн" }
-    local xHeaderOffset = startXOffset
-    for i, label in ipairs(headerTextMap) do
+    local compactHeaderText = { "Монета", "Охота", "Норигорн", "Лан'далок", "Глоб. угроза" }
+    local headerLabels = {}
+    for i, act in ipairs(activityConfig) do
         local hLabel = activitiesHeaderFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        hLabel:SetPoint("CENTER", activitiesHeaderFrame, "LEFT", xHeaderOffset + 10, -3)
-        hLabel:SetText(label)
+        hLabel:SetText(act.name)
         hLabel:SetTextColor(0.7, 0.7, 0.7)
-        xHeaderOffset = xHeaderOffset + stepXOffset
+        headerLabels[i] = hLabel
+    end
+
+    local availableColumnWidth = math.max(1, activitiesHeaderFrame:GetWidth() - startXOffset - 10)
+    local preferredHeaderFontSize = math.min(math.max(GetMainFontSize(), 11), 14)
+    local headerFontSize = preferredHeaderFontSize
+    local fullHeaderWidth
+    while headerFontSize >= 9 do
+        fullHeaderWidth = 0
+        for _, hLabel in ipairs(headerLabels) do
+            hLabel:SetFont("Fonts\\FRIZQT__.TTF", headerFontSize, "OUTLINE")
+            fullHeaderWidth = fullHeaderWidth + hLabel:GetStringWidth()
+        end
+        if fullHeaderWidth + 8 * (#activityConfig - 1) <= availableColumnWidth then break end
+        headerFontSize = headerFontSize - 1
+    end
+
+    local showFullHeaders = headerFontSize >= 9
+    local columnCenters = {}
+    if showFullHeaders then
+        local fullHeaderGap = (availableColumnWidth - fullHeaderWidth) / math.max(1, #activityConfig - 1)
+        local xHeaderOffset = startXOffset
+        for i, hLabel in ipairs(headerLabels) do
+            local labelWidth = hLabel:GetStringWidth()
+            hLabel:SetWidth(labelWidth + 2)
+            hLabel:SetJustifyH("CENTER")
+            hLabel:SetPoint("CENTER", activitiesHeaderFrame, "LEFT", xHeaderOffset + labelWidth / 2, -3)
+            columnCenters[i] = xHeaderOffset + labelWidth / 2
+            xHeaderOffset = xHeaderOffset + labelWidth + fullHeaderGap
+        end
+    else
+        local stepXOffset = availableColumnWidth / #activityConfig
+        headerFontSize = preferredHeaderFontSize
+        while headerFontSize > 8 do
+            local fits = true
+            for i, hLabel in ipairs(headerLabels) do
+                hLabel:SetText(compactHeaderText[i])
+                hLabel:SetFont("Fonts\\FRIZQT__.TTF", headerFontSize, "OUTLINE")
+                if hLabel:GetStringWidth() > stepXOffset - 2 then fits = false end
+            end
+            if fits then break end
+            headerFontSize = headerFontSize - 1
+        end
+
+        for i, hLabel in ipairs(headerLabels) do
+            hLabel:SetFont("Fonts\\FRIZQT__.TTF", headerFontSize, "OUTLINE")
+            hLabel:SetWidth(stepXOffset - 2)
+            hLabel:SetJustifyH("CENTER")
+            local center = startXOffset + (i - 0.5) * stepXOffset
+            hLabel:SetPoint("CENTER", activitiesHeaderFrame, "LEFT", center, -3)
+            columnCenters[i] = center
+        end
     end
 
 ------------ блок 2    
 --sbpt-v348 [ЧАСТЬ 2]: ЦИКЛ ОТРИСОВКИ СТРОК ТВИНКОВ И РЕАЛИЗАЦИЯ МАТРИЦЫ ИНДИКАТОРОВ
     local yOffset = -46
-    local rowHeight = 28
+    local rowHeight = math.max(28, GetMainFontSize() + 12)
     
     for idx, charInfo in ipairs(sortedChars) do
         local row = CreateFrame("Frame", nil, child)
@@ -2350,7 +3336,10 @@ function DrawActivitiesTab()
         line:SetAlpha(0.35)
         
         local nameText = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        nameText:SetFont("Fonts\\FRIZQT__.TTF", GetMainFontSize(), "OUTLINE")
         nameText:SetPoint("LEFT", row, "LEFT", 10, 2)
+        nameText:SetWidth(125)
+        nameText:SetJustifyH("LEFT")
         nameText:SetText(charInfo.name)
         
         local classColor = RAID_CLASS_COLORS[charInfo.class]
@@ -2359,13 +3348,11 @@ function DrawActivitiesTab()
         else
             nameText:SetTextColor(1, 1, 1)
         end
-        
-        local xOffset = startXOffset
-        
-        for _, act in ipairs(activityConfig) do
+
+        for actIndex, act in ipairs(activityConfig) do
             local actBtn = CreateFrame("Button", nil, row)
             actBtn:SetSize(20, 20)
-            actBtn:SetPoint("LEFT", row, "LEFT", xOffset, 2)
+            actBtn:SetPoint("LEFT", row, "LEFT", columnCenters[actIndex] - 10, 2)
             
             local tex = actBtn:CreateTexture(nil, "BACKGROUND")
             tex:SetAllPoints(actBtn)
@@ -2373,17 +3360,26 @@ function DrawActivitiesTab()
             actBtn.texture = tex
             
             local currentStatus = -1
+            local currentQuestID
+            local currentQuestName
+            local currentQuestProgress
             if ramCacheDB and ramCacheDB[currentRealm] and ramCacheDB[currentRealm][charInfo.name] then
                 local charData = ramCacheDB[currentRealm][charInfo.name]
                 if charData.activities and charData.activities[act.key] then
+                    currentQuestID = charData.activities[act.key].questID
+                    currentQuestName = charData.activities[act.key].questName
+                    currentQuestProgress = charData.activities[act.key].questProgress
                     if GetSmartActivityStatus then
                         currentStatus = GetSmartActivityStatus(currentRealm, charInfo.name, act.key)
                     end
                 end
             end
+            if act.key == "LANDALOCK" and currentQuestID then
+                currentQuestName = currentQuestName or LANDALOCK_QUEST_NAMES[tonumber(currentQuestID)]
+            end
             
             local statusText = actBtn:CreateFontString(nil, "OVERLAY")
-            statusText:SetFont("Fonts\\FRIZQT__.TTF", 12, "OUTLINE")
+            statusText:SetFont("Fonts\\FRIZQT__.TTF", GetMainFontSize(), "OUTLINE")
             statusText:SetPoint("CENTER", actBtn, "CENTER", 0, 0)
             statusText:Hide()
 
@@ -2417,7 +3413,7 @@ function DrawActivitiesTab()
                 tex:SetDesaturated(true)
                 actBtn:SetAlpha(0.4)
                 
-                statusText:SetFont("Fonts\\FRIZQT__.TTF", 14, "OUTLINE")
+                statusText:SetFont("Fonts\\FRIZQT__.TTF", GetMainFontSize() + 2, "OUTLINE")
                 statusText:SetTextColor(1, 1, 1)
                 statusText:SetText("?")
                 statusText:Show()
@@ -2428,7 +3424,7 @@ function DrawActivitiesTab()
                 tex:Show()
                 tex:SetDesaturated(false) -- Возвращаем иконке сочные родные цвета, чтобы мигание выглядело красиво!
                 
-                statusText:SetFont("Fonts\\FRIZQT__.TTF", 18, "THICKOUTLINE")
+                statusText:SetFont("Fonts\\FRIZQT__.TTF", GetMainFontSize() + 4, "THICKOUTLINE")
                 statusText:SetTextColor(1, 1, 0) -- Кристально чистый неоново-желтый цвет
                 statusText:SetText("?")
                 statusText:Show()
@@ -2449,7 +3445,7 @@ function DrawActivitiesTab()
             else
                 tex:Hide()
                 statusText:SetTextColor(0.4, 0.4, 0.4)
-                statusText:SetText("—")
+                statusText:SetText(act.key == "LANDALOCK" and currentStatus == 0 and "?" or "—")
                 statusText:Show()
             end
             
@@ -2457,23 +3453,38 @@ function DrawActivitiesTab()
                 GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
                 GameTooltip:ClearLines()
                 GameTooltip:AddLine(act.name, 1, 0.82, 0)
+                local statusText, statusRed, statusGreen, statusBlue
                 
                 if currentStatus == 1 then
-                    GameTooltip:AddLine("Статус: Выполнено и сдано", 0, 1, 0)
+                    statusText = "Статус: Выполнено и сдано"
+                    statusRed, statusGreen, statusBlue = 0, 1, 0
                 elseif currentStatus == 2 then
-                    GameTooltip:AddLine("Статус: В процессе выполнения", 0.6, 0.6, 0.6)
+                    statusText = "Статус: В процессе выполнения"
+                    statusRed, statusGreen, statusBlue = 0.6, 0.6, 0.6
                 elseif currentStatus == 3 then
-                    GameTooltip:AddLine("Статус: Выполнено!", 1, 1, 0)
+                    statusText = "Статус: Выполнено!"
+                    statusRed, statusGreen, statusBlue = 1, 1, 0
                 elseif currentStatus == -1 then
-                    GameTooltip:AddLine("Статус: Нет информации (Требуется зайти на персонажа)", 0.5, 0.5, 0.5)
+                    statusText = "Статус: Нет информации (Требуется зайти на персонажа)"
+                    statusRed, statusGreen, statusBlue = 0.5, 0.5, 0.5
+                elseif act.key == "LANDALOCK" and currentStatus == 0 then
+                    GameTooltip:AddLine("Поговорите с Лан'далоком, чтобы узнать задание этой недели.", 0.7, 0.7, 0.7, true)
+                    statusText = "Статус: Задание не взято или пока неизвестно"
+                    statusRed, statusGreen, statusBlue = 0.7, 0.7, 0.7
                 else
-                    GameTooltip:AddLine("Статус: Можно взять", 0.4, 1, 0.4)
+                    statusText = "Статус: Можно взять"
+                    statusRed, statusGreen, statusBlue = 0.4, 1, 0.4
                 end
+                if act.key == "LANDALOCK" and currentStatus > 0 then
+                    GameTooltip:AddLine("Задание: " .. (currentQuestName or "Название пока недоступно"), 0.7, 0.7, 0.7, true)
+                end
+                if act.key == "GLOBAL_THREAT" and currentStatus > 0 and currentQuestProgress then
+                    GameTooltip:AddLine("Прогресс: " .. currentQuestProgress, 0.7, 0.7, 0.7, true)
+                end
+                GameTooltip:AddLine(statusText, statusRed, statusGreen, statusBlue, true)
                 GameTooltip:Show()
             end)
             actBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
-            
-            xOffset = xOffset + stepXOffset
         end
         row:Show()
         table.insert(activityRowsPool, row)
@@ -2483,6 +3494,20 @@ function DrawActivitiesTab()
 end
 
 --sbpt-v372: ОФИЦИАЛЬНЫЙ СКАНЕР АКТИВНОСТЕЙ С АВТО-ДЕТЕКЦИЕЙ ЦЕЛЕЙ ДЛЯ ИДЕАЛЬНОГО ТРЕКИНГА НОРИГОРНА
+local function GetWeeklyActivityResetTime(currentTime)
+    local dateTable = date("*t", currentTime)
+    local daysSinceThursday = dateTable.wday - 5
+    if daysSinceThursday < 0 then daysSinceThursday = daysSinceThursday + 7 end
+    dateTable.hour = 3
+    dateTable.min = 0
+    dateTable.sec = 0
+    local resetTime = time(dateTable) - (daysSinceThursday * 86400)
+    if dateTable.wday == 5 and currentTime < resetTime then
+        resetTime = resetTime - (7 * 86400)
+    end
+    return resetTime
+end
+
 function UpdateCurrentCharacterActivities(turnedInQuestID)
     local charName = UnitName("player") or "Unknown"
     if charName == "Unknown" then return end
@@ -2504,25 +3529,38 @@ function UpdateCurrentCharacterActivities(turnedInQuestID)
         ["KELDANAS_COIN"] = { 11548 }, 
         ["WEEKLY_HUNT"]  = { 1015000 }, 
         ["NORIGORN"]     = { 22356, 22357, 22358, 22359, 22371, 22372, 22373 },   
+        ["LANDALOCK"]    = { 24580, 24582, 24583, 24579, 24584, 24581, 24586, 24585, 24587, 24589, 24590 },
+        ["GLOBAL_THREAT"] = { 21097 },
     }
     
     local currentTimeStamp = time()
+    local weeklyResetTime = GetWeeklyActivityResetTime(currentTimeStamp)
     
     for key, idList in pairs(activityTargets) do
         local currentStatus = 0
         local isQuestDoneServer = false
+        local matchedQuestID
+        local matchedQuestName
+        local questProgress
         
         -- 1. СЕРВЕРНАЯ ПРОВЕРКА СДАННЫХ КД
         for _, qID in ipairs(idList) do
             if turnedInQuestID and tonumber(turnedInQuestID) == qID then
                 isQuestDoneServer = true
+                matchedQuestID = qID
+                matchedQuestName = LANDALOCK_QUEST_NAMES[qID]
                 break
-            elseif IsQuestFlaggedCompleted and IsQuestFlaggedCompleted(qID) then
-                isQuestDoneServer = true
-                break
-            elseif completedQuests and (completedQuests[qID] or completedQuests[tostring(qID)]) then
-                isQuestDoneServer = true
-                break
+            end
+        end
+        if not isQuestDoneServer then
+            for _, qID in ipairs(idList) do
+                if (IsQuestFlaggedCompleted and IsQuestFlaggedCompleted(qID))
+                    or (completedQuests and (completedQuests[qID] or completedQuests[tostring(qID)])) then
+                    isQuestDoneServer = true
+                    matchedQuestID = qID
+                    matchedQuestName = LANDALOCK_QUEST_NAMES[qID]
+                    break
+                end
             end
         end
         
@@ -2534,17 +3572,27 @@ function UpdateCurrentCharacterActivities(turnedInQuestID)
                 if GetQuestLogIndexByID then
                     local internalIndex = GetQuestLogIndexByID(qID) or 0
                     if internalIndex > 0 then
+                        matchedQuestID = qID
+                        local questTitle = GetQuestLogTitle(internalIndex)
+                        matchedQuestName = questTitle or LANDALOCK_QUEST_NAMES[qID]
                         -- Квест 100% взят персонажем! Проверяем его внутренние цели (критерии) Сируса
                         local isFinishedByObjectives = false
                         local numObjectives = GetNumQuestLeaderBoards(internalIndex) or 0
                         
                         if numObjectives > 0 then
                             local goalCount = 0 -- Инициализируем наш новый счетчик закрытых целей
+                            local objectiveProgress = {}
                             for objIdx = 1, numObjectives do
-                                local _, _, finished = GetQuestLogLeaderBoard(objIdx, internalIndex)
+                                local objectiveText, _, finished = GetQuestLogLeaderBoard(objIdx, internalIndex)
                                 if finished then
                                     goalCount = goalCount + 1 -- Суммируем каждого убитого босса/закрытую цель
                                 end
+                                if objectiveText and objectiveText ~= "" then
+                                    table.insert(objectiveProgress, objectiveText)
+                                end
+                            end
+                            if #objectiveProgress > 0 then
+                                questProgress = table.concat(objectiveProgress, "; ")
                             end
                             -- Подтверждаем выполнение только если количество закрытых целей строго совпало с общим числом!
                             if goalCount == numObjectives then
@@ -2564,16 +3612,48 @@ function UpdateCurrentCharacterActivities(turnedInQuestID)
                     end
                 end
             end
+
+            if currentStatus == 0 and key == "LANDALOCK" then
+                local previousActivity = ramCacheDB[currentRealm][charName].activities[key]
+                if previousActivity and previousActivity.status == 1
+                    and (previousActivity.lastCheck or 0) >= weeklyResetTime then
+                    currentStatus = 1
+                    matchedQuestID = previousActivity.questID
+                    matchedQuestName = previousActivity.questName
+                end
+            end
+        end
+
+        if currentStatus == 1 or currentStatus == 0 then
+            local previousActivity = ramCacheDB[currentRealm][charName].activities[key]
+            if previousActivity and previousActivity.questID == matchedQuestID
+                and (key ~= "LANDALOCK" or currentStatus == 1) then
+                questProgress = questProgress or previousActivity.questProgress
+            end
+        end
+
+        if key == "GLOBAL_THREAT" and currentStatus == 1 then
+            questProgress = questProgress or "Сдано"
+        end
+
+        if key == "LANDALOCK" and matchedQuestID then
+            matchedQuestName = matchedQuestName or LANDALOCK_QUEST_NAMES[matchedQuestID]
         end
         
         -- Бережно сохраняем выверенный статус в ОЗУ-кэш и на жесткий диск WTF
         ramCacheDB[currentRealm][charName].activities[key] = {
             status = currentStatus,
-            lastCheck = currentTimeStamp
+            lastCheck = currentTimeStamp,
+            questID = matchedQuestID,
+            questName = matchedQuestName,
+            questProgress = questProgress
         }
         SirusBPTrackerDB[currentRealm][charName].activities[key] = {
             status = currentStatus,
-            lastCheck = currentTimeStamp
+            lastCheck = currentTimeStamp,
+            questID = matchedQuestID,
+            questName = matchedQuestName,
+            questProgress = questProgress
         }
     end
 end
@@ -2595,16 +3675,7 @@ function GetSmartActivityStatus(realm, char, activityKey)
         if currentTime < serverResetTime then serverResetTime = serverResetTime - 86400 end
         if lastCheck < serverResetTime then return 0 end
     else
-        local dateTable = date("*t", currentTime)
-        local daysSinceThursday = dateTable.wday - 5
-        if daysSinceThursday < 0 then daysSinceThursday = daysSinceThursday + 7 end
-        dateTable.hour = 3; dateTable.min = 0; dateTable.sec = 0
-        local thursdayResetTime = time(dateTable) - (daysSinceThursday * 86400)
-        
-        if dateTable.wday == 5 and currentTime < thursdayResetTime then
-            thursdayResetTime = thursdayResetTime - (7 * 86400)
-        end
-        if lastCheck < thursdayResetTime then return 0 end
+        if lastCheck < GetWeeklyActivityResetTime(currentTime) then return 0 end
     end
     
     return savedStatus
@@ -2689,8 +3760,8 @@ pulseFrame:SetScript("OnUpdate", function(self, elapsed)
     if mainGui and mainGui:IsShown() and mainGui.myTabs then
         local currentTab = SirusBPTrackerConfig and SirusBPTrackerConfig.ActiveTab or 1
         if mainGui.myTabs[2] and mainGui.myTabs[2].SetBackdropColor and currentTab ~= 2 then
-            mainGui.myTabs[2]:SetBackdropColor(0.08, 0.20, 0.35, tabAlpha)
-            mainGui.myTabs[2]:SetBackdropBorderColor(0, 0.6, 0.9, tabAlpha)
+            mainGui.myTabs[2]:SetBackdropColor(0.10, 0.28, 0.46, tabAlpha)
+            mainGui.myTabs[2]:SetBackdropBorderColor(0.25, 0.65, 0.9, tabAlpha)
         end
     end
 end)
@@ -2785,8 +3856,7 @@ function SBPT_ResetMinimapNotification()
     if mainGui and mainGui.myTabs and mainGui.myTabs[2] and mainGui.myTabs[2].SetBackdropColor then
         local currentTab = SirusBPTrackerConfig and SirusBPTrackerConfig.ActiveTab or 1
         if currentTab ~= 2 then
-            mainGui.myTabs[2]:SetBackdropColor(0.05, 0.05, 0.05, 0.85)
-            mainGui.myTabs[2]:SetBackdropBorderColor(0.2, 0.2, 0.2, 1)
+            SetBlueTabStyle(mainGui.myTabs[2], false)
         end
     end
 end
@@ -2826,8 +3896,7 @@ SBPT_TimeUpdaterFrame:SetScript("OnUpdate", function(self, elapsed)
             local aliveCount = 0
             for _, _ in pairs(SBPT_ActiveNotifications) do aliveCount = aliveCount + 1 end
             if aliveCount == 0 and mainGui and mainGui.myTabs and mainGui.myTabs[2] and mainGui.myTabs[2].SetBackdropColor then
-                mainGui.myTabs[2]:SetBackdropColor(0.05, 0.05, 0.05, 0.85)
-                mainGui.myTabs[2]:SetBackdropBorderColor(0.2, 0.2, 0.2, 1)
+                SetBlueTabStyle(mainGui.myTabs[2], false)
             end
         end
     end
