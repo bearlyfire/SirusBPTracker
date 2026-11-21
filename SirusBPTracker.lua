@@ -1118,13 +1118,23 @@ UpdateGUIText = function()
             local hexColor = sbor.hexColor or "ff8040"
             local questFullName = sbor.questName or "Задание"
             local targetQuestID = tonumber(sbor.questID)
+            local rawMessage = tostring(auth.msg or "")
+            local questColor = string.match(rawMessage, "|c(%x%x%x%x%x%x%x%x)|Hquest:" .. tostring(targetQuestID or "") .. "[^|]*|h")
+            questColor = questColor and string.sub(questColor, 3) or hexColor
 
-            local cleanMsg = tostring(auth.msg or "")
+            local cleanMsg = rawMessage
             cleanMsg = string.gsub(cleanMsg, "|Hquest:.-|h%[.-%]|h", ""):gsub("|Hquest:.-|h.-|h", "")
+            local groupLink, groupText = string.match(cleanMsg, "|H(lfglist:[^|]+)|h(.-)|h")
+            local groupColor = string.match(cleanMsg, "|c(%x%x%x%x%x%x%x%x)|Hlfglist:[^|]+|h")
+            groupColor = groupColor and string.sub(groupColor, 3) or "ffffff"
+            cleanMsg = string.gsub(cleanMsg, "|Hlfglist:[^|]+|h.-|h", "")
             cleanMsg = string.gsub(cleanMsg, "|Hplayer:.-|h.-|h", ""):gsub("%[?" .. questFullName .. "%]?", "")
             cleanMsg = string.gsub(cleanMsg, "|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
             cleanMsg = string.gsub(cleanMsg, "^%s*:%s*", ""):gsub("^%s+", ""):gsub("%s+$", "")
             if cleanMsg == "" then cleanMsg = "Ищет группу" end
+            if groupText then
+                groupText = groupText:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+            end
 
             local charProgressStrings = {}
 
@@ -1175,9 +1185,30 @@ UpdateGUIText = function()
             sborLine:SetWidth(math.max(1, rowWidth - 120))
             sborLine:SetJustifyH("LEFT")
             sborLine:SetNonSpaceWrap(true)
-            sborLine:SetText(string.format("%s|cff%s[%s]|r |cff%s[%s]|r: |cffffffff\"%s\"|r",
-                twinsLine, hexColor, questFullName, classHex, auth.name, cleanMsg))
+            local groupDisplay = groupLink and groupText and groupText ~= "" and groupText or nil
+            local lineContent = string.format("%s|cff%s[%s]|r ", twinsLine, questColor, questFullName)
+            local groupOffset, groupWidth
+            if groupDisplay then
+                local measureText = sborRow:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+                measureText:SetFont("Fonts\\FRIZQT__.TTF", GetMainFontSize(), "OUTLINE")
+                measureText:SetText(lineContent)
+                groupOffset = measureText:GetStringWidth()
+                measureText:SetText("|cff" .. groupColor .. groupDisplay .. "|r")
+                groupWidth = measureText:GetStringWidth()
+                measureText:Hide()
+                lineContent = lineContent .. "|cff" .. groupColor .. groupDisplay .. "|r "
+            end
 
+            local authorOffsetText = sborRow:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            authorOffsetText:SetFont("Fonts\\FRIZQT__.TTF", GetMainFontSize(), "OUTLINE")
+            authorOffsetText:SetText(lineContent)
+            local authorOffset = authorOffsetText:GetStringWidth()
+            authorOffsetText:SetText("|cff" .. classHex .. "[" .. auth.name .. "]|r")
+            local authorWidth = authorOffsetText:GetStringWidth()
+            authorOffsetText:Hide()
+
+            sborLine:SetText(lineContent .. string.format("|cff%s[%s]|r: |cffffffff\"%s\"|r",
+                classHex, auth.name, cleanMsg))
             local rowHeight = math.max(18, math.floor(sborLine:GetStringHeight() + 4))
             sborRow:SetHeight(rowHeight)
 
@@ -1189,17 +1220,9 @@ UpdateGUIText = function()
 
             local rowBtn = CreateFrame("Button", "SirusBPSborRowBtn_" .. sborBtnIdx, sborRow)
             rowBtn:SetAllPoints(sborRow)
-            rowBtn:RegisterForClicks("LeftButtonUp")
             rowBtn.questName = questFullName
-            rowBtn.authorName = auth.name
             rowBtn.questID = targetQuestID
             sborBtnIdx = sborBtnIdx + 1
-
-            rowBtn:SetScript("OnClick", function(self)
-                if ChatFrame_OpenChat and self.authorName then
-                    ChatFrame_OpenChat("/ш " .. tostring(self.authorName) .. " ", DEFAULT_CHAT_FRAME)
-                end
-            end)
 
 --sbpt-v227: ЧИСТЫЙ ОЗУ-ТУЛТИП СБОРОВ: МГНОВЕННЫЙ ВЫВОД ТВИНКОВ ПО ЛОКАЛЬНОЙ БАЗЕ БЕЗ ЗАПРОСОВ К СЕРВЕРУ
             rowBtn:SetScript("OnEnter", function(self)
@@ -1282,11 +1305,41 @@ UpdateGUIText = function()
                 GameTooltip:Hide()
             end)
 
+            if groupDisplay then
+                local groupBtn = CreateFrame("Button", nil, sborRow)
+                groupBtn:RegisterForClicks("LeftButtonUp")
+                groupBtn:SetFrameLevel(rowBtn:GetFrameLevel() + 1)
+                groupBtn:SetSize(math.max(1, groupWidth), 18)
+                groupBtn:SetPoint("TOPLEFT", sborRow, "TOPLEFT", 120 + groupOffset, 0)
+                groupBtn.groupLink = groupLink
+                groupBtn.groupText = groupText
+                groupBtn:SetScript("OnClick", function(self)
+                    if SetItemRef then
+                        SetItemRef(self.groupLink, self.groupText, "LeftButton", DEFAULT_CHAT_FRAME)
+                    end
+                end)
+                table.insert(sborChild.widgets, groupBtn)
+            end
+
+            local authorButton = CreateFrame("Button", nil, sborRow)
+            authorButton:RegisterForClicks("LeftButtonUp")
+            authorButton:SetFrameLevel(rowBtn:GetFrameLevel() + 1)
+            authorButton:SetSize(math.max(1, authorWidth), 18)
+            authorButton:SetPoint("TOPLEFT", sborRow, "TOPLEFT", 120 + authorOffset, 0)
+            authorButton.authorName = auth.name
+            authorButton:SetScript("OnClick", function(self)
+                if ChatFrame_OpenChat and self.authorName then
+                    ChatFrame_OpenChat("/ш " .. tostring(self.authorName) .. " ", DEFAULT_CHAT_FRAME)
+                end
+            end)
+
             yOffset = yOffset - (rowHeight + 8)
             table.insert(sborChild.widgets, sborRow)
             table.insert(sborChild.widgets, sborLine)
             table.insert(sborChild.widgets, timeText)
             table.insert(sborChild.widgets, rowBtn)
+            table.insert(sborChild.widgets, authorOffsetText)
+            table.insert(sborChild.widgets, authorButton)
         end
         sborChild:SetHeight(math.abs(yOffset) + 20)
     end
@@ -1707,20 +1760,17 @@ chatTrackerFrame:SetScript("OnEvent", function(self, event, ...)
             end
         end
 
-        for rawQuestID in string.gmatch(arg1, "|Hquest:(%d+)") do
+        for rawQuestID, questTitleName in string.gmatch(arg1, "|Hquest:(%d+)[^|]*|h%[([^%]]+)%]|h") do
             local questID = tonumber(rawQuestID)
             
             if questID then
-                local questTitleName = string.match(arg1, "|h%[([^%]]+)%]")
-                
                 if questTitleName then
                     -- ВОЗВРАЩЕНО: Пишем сборы ЛФГ напрямую в файл жесткого диска SirusBPTrackerDB!
                     if not SirusBPTrackerDB then SirusBPTrackerDB = {} end
                     if not SirusBPTrackerDB["QUEST_LFG"] then SirusBPTrackerDB["QUEST_LFG"] = {} end
                     
-                    local hexColor = "ff8040"
-                    local foundQuestHex = string.match(arg1, "|cff(%x%x%x%x%x%x)")
-                    if foundQuestHex then hexColor = foundQuestHex end
+                    local foundQuestColor = string.match(arg1, "|c(%x%x%x%x%x%x%x%x)|Hquest:" .. rawQuestID .. "[^|]*|h")
+                    local hexColor = foundQuestColor and string.sub(foundQuestColor, 3) or "ff8040"
 
                     SirusBPTrackerDB["QUEST_LFG"][questID] = SirusBPTrackerDB["QUEST_LFG"][questID] or {
                         questName = questTitleName,
